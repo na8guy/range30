@@ -205,18 +205,19 @@ tripPlannerForm.addEventListener('submit', async (e) => {
   try {
     const user = window.firebaseAuth.currentUser;
     const token = await user.getIdToken();
-    console.log('Planning trip for user ID:', user.uid);
+    const formData = {
+      destination: document.getElementById('destination').value,
+      dates: document.getElementById('dates').value,
+      preferences: document.getElementById('preferences').value,
+      budget: parseFloat(document.getElementById('budget').value),
+      allowTopUp: document.getElementById('allow-topup').checked,
+      language: 'en'
+    };
+    console.log('Planning trip for user ID:', user.uid, 'with data:', formData);
     const response = await fetch(`${BACKEND_URL}/api/ai-trip-planner`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-      body: JSON.stringify({
-        destination: document.getElementById('destination').value,
-        dates: document.getElementById('dates').value,
-        preferences: document.getElementById('preferences').value,
-        budget: parseFloat(document.getElementById('budget').value),
-        allowTopUp: document.getElementById('allow-topup').checked,
-        language: 'en'
-      })
+      body: JSON.stringify(formData)
     });
     if (!response.ok) {
       const text = await response.text();
@@ -225,10 +226,11 @@ tripPlannerForm.addEventListener('submit', async (e) => {
         statusText: response.statusText,
         responseText: text,
         url: response.url
-      }); // Updated logging
-      throw new Error(`HTTP error! Status: ${response.status}, Response: ${text.slice(0, 100)}`);
+      });
+      throw new Error(`HTTP error! Status: ${response.status}, Response: ${text}`);
     }
     const trip = await response.json();
+    console.log('Trip plan received:', trip);
     tripResult.innerHTML = `
       <h3>Trip to ${trip.destination}</h3>
       <p>Cost: £${trip.cost}</p>
@@ -239,7 +241,7 @@ tripPlannerForm.addEventListener('submit', async (e) => {
       ${trip.topUpRequired ? `<p>Top-Up Required: £${trip.topUpAmount}</p><button onclick="topUp(${trip.topUpAmount}, '${user.uid}')">Top Up</button>` : ''}
     `;
   } catch (error) {
-    console.error('Trip planner error:', error.message, error.stack); // Updated logging
+    console.error('Trip planner error:', error.message, error.stack);
     tripResult.innerHTML = `<p>Error planning trip: ${error.message}</p>`;
   }
   loading.style.display = 'none';

@@ -91,6 +91,24 @@ const authMiddleware = async (req, res, next) => {
   }
 };
 
+// Validate IATA code
+async function validateIataCode(code) {
+  try {
+    const amadeus = new Amadeus({
+      clientId: process.env.AMADEUS_API_KEY,
+      clientSecret: process.env.AMADEUS_API_SECRET
+    });
+    const response = await amadeus.referenceData.locations.get({
+      subType: 'AIRPORT',
+      keyword: code
+    });
+    return response.data.length > 0;
+  } catch (error) {
+    console.error('IATA code validation error:', error.response?.data || error.message);
+    return false;
+  }
+}
+
 // API Routes
 
 // Firebase Config
@@ -239,7 +257,7 @@ app.post('/api/referrals', authMiddleware, async (req, res) => {
     const referral = new Referral({
       userId: req.user.uid,
       email,
-      reward: 10 // Example reward
+      reward: 10
     });
     await referral.save();
     res.json({ message: 'Referral submitted' });
@@ -292,6 +310,13 @@ app.post('/api/ai-trip-planner', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'Invalid date format. Use YYYY-MM-DD to YYYY-MM-DD' });
     }
 
+    // Validate destination IATA code
+    const isValidDestination = await validateIataCode(destination.toUpperCase());
+    if (!isValidDestination) {
+      console.error('Invalid destination IATA code:', destination);
+      return res.status(400).json({ error: `Invalid destination code: ${destination}` });
+    }
+
     // Validate environment variables
     if (!process.env.AMADEUS_API_KEY || !process.env.AMADEUS_API_SECRET) {
       console.error('Missing Amadeus API credentials');
@@ -310,28 +335,39 @@ app.post('/api/ai-trip-planner', authMiddleware, async (req, res) => {
 
     let flightOffers, hotelOffers;
     try {
+      console.log('Fetching flight offers from Amadeus:', { origin: 'LON', destination: destination.toUpperCase(), startDate, endDate, budget });
       flightOffers = await amadeus.shopping.flightOffersSearch.get({
-        originLocationCode: 'LON', // Replace with dynamic origin if needed
+        originLocationCode: 'LON',
         destinationLocationCode: destination.toUpperCase(),
         departureDate: startDate,
         returnDate: endDate,
         adults: 1,
-        maxPrice: budget
+        maxPrice: Math.floor(budget),
+        currencyCode: 'GBP'
       });
+      if (!flightOffers.data || flightOffers.data.length === 0) {
+        console.warn('No flight offers found for:', { destination, startDate, endDate });
+        flightOffers = { data: [] };
+      }
     } catch (amadeusError) {
       console.error('Amadeus flight search error:', amadeusError.response?.data || amadeusError.message);
-      return res.status(500).json({ error: 'Failed to fetch flight data from Amadeus' });
+      return res.status(500).json({ error: `Failed to fetch flight data from Amadeus: ${amadeusError.message}` });
     }
 
     try {
+      console.log('Fetching hotel offers from Amadeus:', { cityCode: destination.toUpperCase(), startDate, endDate });
       hotelOffers = await amadeus.shopping.hotelOffers.get({
         cityCode: destination.toUpperCase(),
         checkInDate: startDate,
         checkOutDate: endDate
       });
+      if (!hotelOffers.data || hotelOffers.data.length === 0) {
+        console.warn('No hotel offers found for:', { destination, startDate, endDate });
+        hotelOffers = { data: [] };
+      }
     } catch (amadeusError) {
       console.error('Amadeus hotel search error:', amadeusError.response?.data || amadeusError.message);
-      return res.status(500).json({ error: 'Failed to fetch hotel data from Amadeus' });
+      return res.status(500).json({ error: `Failed to fetch hotel data from Amadeus: ${amadeusError.message}` });
     }
 
     // Generate trip plan with OpenAI
@@ -339,6 +375,7 @@ app.post('/api/ai-trip-planner', authMiddleware, async (req, res) => {
     const prompt = `Plan a trip to ${destination} from ${startDate} to ${endDate} with a budget of £${budget}. Preferences: ${preferences}. Include activities, hotels, and flights. Return a list of activities starting with "-".`;
     let completion;
     try {
+      console.log('Generating trip plan with OpenAI:', { prompt });
       completion = await openai.chat.completions.create({
         model: 'gpt-3.5-turbo',
         messages: [{ role: 'user', content: prompt }],
@@ -346,7 +383,7 @@ app.post('/api/ai-trip-planner', authMiddleware, async (req, res) => {
       });
     } catch (openaiError) {
       console.error('OpenAI error:', openaiError.response?.data || openaiError.message);
-      return res.status(500).json({ error: 'Failed to generate trip plan with OpenAI' });
+      return res.status(500).json({ error: `Failed to generate trip plan with OpenAI: ${openaiError.message}` });
     }
 
     const cost = calculateTotalCost(flightOffers, hotelOffers);
@@ -354,8 +391,8 @@ app.post('/api/ai-trip-planner', authMiddleware, async (req, res) => {
       destination,
       cost,
       activities: completion.choices[0].message.content.split('\n').filter(line => line.startsWith('-')),
-      hotels: hotelOffers.data.map(h => h.name || 'Unknown Hotel'),
-      flights: flightOffers.data.map(f => f.itineraries[0].segments[0].departure.iataCode || 'Unknown Flight'),
+      hotels: hotelOffers.data.length ? hotelOffers.data.map(h => h.name || 'Unknown Hotel') : ['No hotels available'],
+      flights: flightOffers.data.length ? flightOffers.data.map(f => f.itineraries[0].segments[0].departure.iataCode || 'Unknown Flight') : ['No flights available'],
       carbonFootprint: calculateCarbonFootprint(flightOffers),
       topUpRequired: allowTopUp && cost > budget,
       topUpAmount: cost > budget ? cost - budget : 0
@@ -370,7 +407,7 @@ app.post('/api/ai-trip-planner', authMiddleware, async (req, res) => {
       return res.status(500).json({ error: 'Failed to save trip plan to database' });
     }
 
-    console.log('Trip plan generated for user:', userId);
+    console.log('Trip plan generated for user:', userId, tripPlan);
     res.json(tripPlan);
   } catch (error) {
     console.error('Trip planner error:', error.message, error.stack);
@@ -382,7 +419,7 @@ app.post('/api/ai-trip-planner', authMiddleware, async (req, res) => {
 function calculateTotalCost(flightOffers, hotelOffers) {
   const flightCost = flightOffers.data[0]?.price?.total || 0;
   const hotelCost = hotelOffers.data[0]?.offers[0]?.price?.total || 0;
-  return parseFloat(flightCost) + parseFloat(hotelCost);
+  return parseFloat(flightCost) + parseFloat(hotelCost) || 100; // Fallback cost
 }
 
 function calculateCarbonFootprint(flightOffers) {
