@@ -1,6 +1,7 @@
 import { signInWithCustomToken, onAuthStateChanged, signOut } from 'https://www.gstatic.com/firebasejs/9.23.0/firebase-auth.js';
 import { getToken } from 'https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging.js';
 
+const BACKEND_URL = 'https://range30.onrender.com';
 const auth = window.firebaseAuth;
 const messaging = window.firebaseMessaging;
 const stripe = Stripe('pk_live_Dg82e49VRbGtBVT8Y9gF4v6d'); // Replace with your Stripe publishable key
@@ -38,25 +39,40 @@ function showSection(sectionId) {
 }
 
 // Authentication state
-onAuthStateChanged(auth, user => {
-  if (user) {
-    authNav.innerHTML = `<a href="#logout">Logout</a>`;
-    authNav.querySelector('a').addEventListener('click', () => signOut(auth));
-    fetchSubscriptions();
-    fetchReferrals();
-    showSection('subscriptions');
-  } else {
-    authNav.innerHTML = `<a href="#login">Login</a>`;
-    showSection('login');
-  }
-});
+if (!auth) {
+  console.error('Firebase Auth not initialized');
+  document.getElementById('loading').innerText = 'Authentication service unavailable';
+  document.getElementById('loading').style.display = 'block';
+} else {
+  onAuthStateChanged(auth, user => {
+    if (user) {
+      authNav.innerHTML = `<a href="#logout">Logout</a>`;
+      authNav.querySelector('a').addEventListener('click', () => {
+        signOut(auth).catch(error => console.error('Sign out error:', error));
+      });
+      fetchSubscriptions();
+      fetchReferrals();
+      showSection('subscriptions');
+    } else {
+      authNav.innerHTML = `<a href="#login">Login</a>`;
+      showSection('login');
+    }
+  });
+}
 
 // Fetch subscriptions
 async function fetchSubscriptions() {
   loading.style.display = 'block';
   try {
     const response = await fetch(`${BACKEND_URL}/api/subscriptions`);
+    if (!response.ok) {
+      throw new Error(`HTTP error! Status: ${response.status}`);
+    }
     const subscriptions = await response.json();
+    if (!subscriptions || subscriptions.length === 0) {
+      subscriptionsList.innerHTML = '<p>No subscriptions available</p>';
+      return;
+    }
     subscriptionsList.innerHTML = subscriptions.map(sub => `
       <div class="subscription-card">
         <h3>${sub.name}</h3>
@@ -67,13 +83,18 @@ async function fetchSubscriptions() {
     `).join('');
   } catch (error) {
     console.error('Error fetching subscriptions:', error);
-    subscriptionsList.innerHTML = '<p.Error loading subscriptions</p>';
+    subscriptionsList.innerHTML = '<p>Error loading subscriptions: ${error.message}</p>';
   }
   loading.style.display = 'none';
 }
 
 // Subscribe with Stripe
 async function subscribe(subscriptionId) {
+  if (!auth.currentUser) {
+    alert('Please log in to subscribe');
+    showSection('login');
+    return;
+  }
   loading.style.display = 'block';
   try {
     const user = auth.currentUser;
@@ -83,11 +104,14 @@ async function subscribe(subscriptionId) {
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
       body: JSON.stringify({ subscriptionId, userId: user.uid })
     });
+    if (!response.ok) {
+      throw new Error(`HTTP error! Status: ${response.status}`);
+    }
     const { sessionId } = await response.json();
     await stripe.redirectToCheckout({ sessionId });
   } catch (error) {
     console.error('Subscription error:', error);
-    alert('Error processing subscription');
+    alert('Error processing subscription: ' + error.message);
   }
   loading.style.display = 'none';
 }
@@ -95,6 +119,11 @@ async function subscribe(subscriptionId) {
 // Trip planner
 tripPlannerForm.addEventListener('submit', async (e) => {
   e.preventDefault();
+  if (!auth.currentUser) {
+    alert('Please log in to plan a trip');
+    showSection('login');
+    return;
+  }
   loading.style.display = 'block';
   try {
     const user = auth.currentUser;
@@ -111,6 +140,9 @@ tripPlannerForm.addEventListener('submit', async (e) => {
         language: 'en'
       })
     });
+    if (!response.ok) {
+      throw new Error(`HTTP error! Status: ${response.status}`);
+    }
     const trip = await response.json();
     tripResult.innerHTML = `
       <h3>Trip to ${trip.destination}</h3>
@@ -123,13 +155,18 @@ tripPlannerForm.addEventListener('submit', async (e) => {
     `;
   } catch (error) {
     console.error('Trip planner error:', error);
-    tripResult.innerHTML = '<p>Error planning trip</p>';
+    tripResult.innerHTML = `<p>Error planning trip: ${error.message}</p>`;
   }
   loading.style.display = 'none';
 });
 
 // Top-up with Stripe
 async function topUp(amount, userId) {
+  if (!auth.currentUser) {
+    alert('Please log in to top up');
+    showSection('login');
+    return;
+  }
   loading.style.display = 'block';
   try {
     const token = await auth.currentUser.getIdToken();
@@ -138,11 +175,14 @@ async function topUp(amount, userId) {
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
       body: JSON.stringify({ amount, userId })
     });
+    if (!response.ok) {
+      throw new Error(`HTTP error! Status: ${response.status}`);
+    }
     const { sessionId } = await response.json();
     await stripe.redirectToCheckout({ sessionId });
   } catch (error) {
     console.error('Top-up error:', error);
-    alert('Error processing top-up');
+    alert('Error processing top-up: ' + error.message);
   }
   loading.style.display = 'none';
 }
@@ -150,6 +190,11 @@ async function topUp(amount, userId) {
 // Referrals
 referralForm.addEventListener('submit', async (e) => {
   e.preventDefault();
+  if (!auth.currentUser) {
+    alert('Please log in to submit a referral');
+    showSection('login');
+    return;
+  }
   loading.style.display = 'block';
   try {
     const user = auth.currentUser;
@@ -159,16 +204,23 @@ referralForm.addEventListener('submit', async (e) => {
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
       body: JSON.stringify({ email: document.getElementById('referral-email').value })
     });
+    if (!response.ok) {
+      throw new Error(`HTTP error! Status: ${response.status}`);
+    }
     await response.json();
     fetchReferrals();
   } catch (error) {
     console.error('Referral error:', error);
-    referralsList.innerHTML = '<p>Error submitting referral</p>';
+    referralsList.innerHTML = `<p>Error submitting referral: ${error.message}</p>`;
   }
   loading.style.display = 'none';
 });
 
 async function fetchReferrals() {
+  if (!auth.currentUser) {
+    referralsList.innerHTML = '<p>Please log in to view referrals</p>';
+    return;
+  }
   loading.style.display = 'block';
   try {
     const user = auth.currentUser;
@@ -176,13 +228,16 @@ async function fetchReferrals() {
     const response = await fetch(`${BACKEND_URL}/api/referrals`, {
       headers: { 'Authorization': `Bearer ${token}` }
     });
+    if (!response.ok) {
+      throw new Error(`HTTP error! Status: ${response.status}`);
+    }
     const referrals = await response.json();
-    subscriptionsList.innerHTML = referrals.map(r => `
-      <p>Referred ${r.email} - Reward: £${r.reward}</p>
-    `).join('');
+    referralsList.innerHTML = referrals.length
+      ? referrals.map(r => `<p>Referred ${r.email} - Reward: £${r.reward}</p>`).join('')
+      : '<p>No referrals yet</p>';
   } catch (error) {
     console.error('Error fetching referrals:', error);
-    referralsList.innerHTML = '<p>Error loading referrals</p>';
+    referralsList.innerHTML = `<p>Error loading referrals: ${error.message}</p>`;
   }
   loading.style.display = 'none';
 }
@@ -190,6 +245,10 @@ async function fetchReferrals() {
 // Login
 loginForm.addEventListener('submit', async (e) => {
   e.preventDefault();
+  if (!auth) {
+    alert('Authentication service unavailable');
+    return;
+  }
   loading.style.display = 'block';
   try {
     const email = document.getElementById('login-email').value;
@@ -199,11 +258,14 @@ loginForm.addEventListener('submit', async (e) => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password })
     });
+    if (!response.ok) {
+      throw new Error(`HTTP error! Status: ${response.status}`);
+    }
     const { token } = await response.json();
     await signInWithCustomToken(auth, token);
   } catch (error) {
     console.error('Login error:', error);
-    alert('Invalid credentials');
+    alert('Login failed: ' + error.message);
   }
   loading.style.display = 'none';
 });
@@ -211,6 +273,10 @@ loginForm.addEventListener('submit', async (e) => {
 // Register
 registerForm.addEventListener('submit', async (e) => {
   e.preventDefault();
+  if (!auth) {
+    alert('Authentication service unavailable');
+    return;
+  }
   loading.style.display = 'block';
   try {
     const name = document.getElementById('register-name').value;
@@ -221,29 +287,34 @@ registerForm.addEventListener('submit', async (e) => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, email, password })
     });
+    if (!response.ok) {
+      throw new Error(`HTTP error! Status: ${response.status}`);
+    }
     const { token } = await response.json();
     await signInWithCustomToken(auth, token);
   } catch (error) {
     console.error('Register error:', error);
-    alert('Registration failed');
+    alert('Registration failed: ' + error.message);
   }
   loading.style.display = 'none';
 });
 
 // Get Started button
 getStartedBtn.addEventListener('click', () => {
-  showSection(auth.currentUser ? 'subscriptions' : 'login');
+  showSection(auth?.currentUser ? 'subscriptions' : 'login');
 });
 
 // Request notification permission
-try {
-  await messaging.requestPermission();
-  const token = await getToken(messaging, { vapidKey: window.vapidKey });
-  await fetch(`${BACKEND_URL}/api/save-notification-token`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${await auth.currentUser?.getIdToken()}` },
-    body: JSON.stringify({ token, userId: auth.currentUser?.uid })
-  });
-} catch (error) {
-  console.error('Notification permission error:', error);
+if (messaging) {
+  try {
+    await messaging.requestPermission();
+    const token = await getToken(messaging, { vapidKey: window.vapidKey });
+    await fetch(`${BACKEND_URL}/api/save-notification-token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${await auth?.currentUser?.getIdToken()}` },
+      body: JSON.stringify({ token, userId: auth?.currentUser?.uid })
+    });
+  } catch (error) {
+    console.error('Notification permission error:', error);
+  }
 }
