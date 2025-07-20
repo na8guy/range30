@@ -2,7 +2,7 @@ import { signInWithCustomToken, onAuthStateChanged, signOut } from 'https://www.
 import { getToken } from 'https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging.js';
 
 const BACKEND_URL = 'https://range30.onrender.com';
-const stripe = Stripe('pk_test_51YOURSTRIPEPUBLISHABLEKEY');
+const stripe = Stripe('pk_live_Dg82e49VRbGtBVT8Y9gF4v6d');
 
 // DOM elements
 const getStartedBtn = document.getElementById('get-started');
@@ -35,14 +35,14 @@ document.querySelectorAll('nav a').forEach(link => {
   });
 });
 
-// Handle hash changes for client-side routing
+// Handle hash changes
 window.addEventListener('hashchange', () => {
   const sectionId = window.location.hash.slice(1) || 'login';
   console.log('Hash changed, showing section:', sectionId);
   showSection(sectionId);
 });
 
-// Initialize section based on current hash
+// Initialize section
 document.addEventListener('DOMContentLoaded', () => {
   const sectionId = window.location.hash.slice(1) || 'login';
   console.log('Page loaded, showing section:', sectionId);
@@ -75,14 +75,14 @@ function showSection(sectionId) {
   }
 }
 
-// Wait for Firebase initialization
+// Wait for Firebase
 async function waitForFirebase() {
   const maxAttempts = 30;
   let attempts = 0;
   while (!window.firebaseInitialized || !window.firebaseAuth || typeof window.firebaseAuth !== 'object') {
     if (attempts >= maxAttempts) {
       console.error('Firebase initialization timed out after', maxAttempts, 'attempts');
-      loading.innerText = 'Authentication service unavailable. Please check your network or try again later.';
+      loading.innerText = 'Authentication service unavailable. Please try again later.';
       loading.style.display = 'block';
       return false;
     }
@@ -94,12 +94,12 @@ async function waitForFirebase() {
   return true;
 }
 
-// Authentication state
+// Authentication
 async function initializeAuth() {
   console.log('Starting auth initialization...');
   if (!(await waitForFirebase())) {
     console.error('Failed to initialize auth due to timeout');
-    alert('Authentication service unavailable. Please try again later or contact support.');
+    alert('Authentication service unavailable.');
     return;
   }
   const auth = window.firebaseAuth;
@@ -202,7 +202,8 @@ async function fetchSuggestions(query) {
   try {
     const response = await fetch(`${BACKEND_URL}/api/destination-suggestions?query=${encodeURIComponent(query)}`);
     if (!response.ok) {
-      throw new Error('Failed to fetch suggestions');
+      const text = await response.text();
+      throw new Error(`HTTP error! Status: ${response.status}, Response: ${text}`);
     }
     const suggestions = await response.json();
     suggestionsContainer.innerHTML = suggestions.map(s => `
@@ -217,8 +218,8 @@ async function fetchSuggestions(query) {
       });
     });
   } catch (error) {
-    console.error('Suggestions error:', error);
-    suggestionsContainer.innerHTML = '<p>Error loading suggestions</p>';
+    console.error('Suggestions error:', error.message);
+    suggestionsContainer.innerHTML = `<p>Error loading suggestions: ${error.message}</p>`;
   }
 }
 
@@ -274,12 +275,12 @@ tripPlannerForm.addEventListener('submit', async (e) => {
       <div class="trip-plan">
         <h3>${plan.planType.charAt(0).toUpperCase() + plan.planType.slice(1)} Trip to ${plan.destination}</h3>
         ${plan.error ? `<p>Error: ${plan.error}</p>` : `
-          <p>Cost: £${plan.cost}</p>
+          <p>Cost: £${plan.cost.toFixed(2)}</p>
           <p>Activities: ${plan.activities.join(', ')}</p>
           <p>Hotels: ${plan.hotels.join(', ')}</p>
           <p>Flights: ${plan.flights.join(', ')}</p>
           <p>Carbon Footprint: ${plan.carbonFootprint} kg</p>
-          ${plan.topUpRequired ? `<p>Top-Up Required: £${plan.topUpAmount}</p><button onclick="topUp(${plan.topUpAmount}, '${user.uid}')">Top Up</button>` : ''}
+          ${plan.topUpRequired ? `<p>Top-Up Required: £${plan.topUpAmount.toFixed(2)}</p><button onclick="topUp(${plan.topUpAmount}, '${user.uid}')">Top Up</button>` : ''}
         `}
       </div>
     `).join('');
@@ -300,7 +301,7 @@ async function topUp(amount, userId) {
   loading.style.display = 'block';
   try {
     const token = await window.firebaseAuth.currentUser.getIdToken();
-    console.log('Top-up for user ID:', userId);
+    console.log('Top-up for user ID:', userId, 'amount:', amount);
     const response = await fetch(`${BACKEND_URL}/api/create-topup-session`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
@@ -385,7 +386,7 @@ async function fetchReferrals() {
 loginForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   if (!(await waitForFirebase()) || !window.firebaseAuth) {
-    alert('Authentication service unavailable. Please check your network or try again later.');
+    alert('Authentication service unavailable.');
     return;
   }
   loading.style.display = 'block';
@@ -424,7 +425,7 @@ loginForm.addEventListener('submit', async (e) => {
 registerForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   if (!(await waitForFirebase()) || !window.firebaseAuth) {
-    alert('Authentication service unavailable. Please check your network or try again later.');
+    alert('Authentication service unavailable.');
     return;
   }
   loading.style.display = 'block';
@@ -469,7 +470,7 @@ getStartedBtn.addEventListener('click', async () => {
   }
 });
 
-// Request notification permission
+// Notification permission
 if (window.firebaseMessaging && (await waitForFirebase())) {
   try {
     await window.firebaseMessaging.requestPermission();

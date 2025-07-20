@@ -1,74 +1,64 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GlobeTrotter Subscriptions</title>
-    <link rel="stylesheet" href="/styles.css">
-    <script src="https://js.stripe.com/v3/"></script>
-    <script type="module" src="/firebase-init.js" defer></script>
-    <script type="module" src="/app.js" defer></script>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GlobeTrotter</title>
+  <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-    <header>
-        <h1>GlobeTrotter</h1>
-        <nav>
-            <a href="#subscriptions">Subscriptions</a>
-            <a href="#planner">Trip Planner</a>
-            <a href="#referrals">Referrals</a>
-            <a href="#login" id="auth-nav">Login</a>
-        </nav>
-    </header>
-    <main>
-        <div id="loading" style="display: none;">Loading...</div>
-        <section id="hero" class="section">
-            <h2>Explore the World with GlobeTrotter</h2>
-            <p>Choose a subscription, plan your dream trip, and earn rewards!</p>
-            <button id="get-started">Get Started</button>
-        </section>
-        <section id="subscriptions" class="section">
-            <h2>Choose Your Subscription</h2>
-            <div id="subscriptions-list"></div>
-        </section>
-        <section id="planner" class="section">
-            <h2>Trip Planner</h2>
-            <form id="trip-planner-form">
-                <input type="text" id="destination" placeholder="Destination" required>
-                <input type="text" id="dates" placeholder="Dates (YYYY-MM-DD to YYYY-MM-DD)" required>
-                <input type="text" id="preferences" placeholder="Preferences (e.g., adventure, relaxation)" required>
-                <input type="number" id="budget" placeholder="Budget (£)" required>
-                <label><input type="checkbox" id="allow-topup"> Allow Top-Up</label>
-                <button type="submit">Plan Trip</button>
-            </form>
-            <div id="trip-result"></div>
-        </section>
-        <section id="referrals" class="section">
-            <h2>Refer a Friend</h2>
-            <form id="referral-form">
-                <input type="email" id="referral-email" placeholder="Friend's Email" required>
-                <button type="submit">Refer</button>
-            </form>
-            <div id="referrals-list"></div>
-        </section>
-        <section id="login" class="section active">
-            <h2>Login</h2>
-            <form id="login-form">
-                <input type="email" id="login-email" placeholder="Email" required>
-                <input type="password" id="login-password" placeholder="Password" required>
-                <button type="submit">Login</button>
-                <p>Don't have an account? <a href="#register">Register</a></p>
-            </form>
-        </section>
-        <section id="register" class="section">
-            <h2>Register</h2>
-            <form id="register-form">
-                <input type="text" id="register-name" placeholder="Name" required>
-                <input type="email" id="register-email" placeholder="Email" required>
-                <input type="password" id="register-password" placeholder="Password" required>
-                <button type="submit">Register</button>
-                <p>Already have an account? <a href="#login">Login</a></p>
-            </form>
-        </section>
-    </main>
+  <nav>
+    <a href="#subscriptions">Subscriptions</a>
+    <a href="#planner">Trip Planner</a>
+    <a href="#referrals">Referrals</a>
+    <span id="auth-nav"><a href="#login">Login</a></span>
+  </nav>
+  <div id="loading">Loading...</div>
+  <div id="login" class="section">
+    <h2>Login</h2>
+    <form id="login-form">
+      <input type="email" id="login-email" placeholder="Email" required>
+      <input type="password" id="login-password" placeholder="Password" required>
+      <button type="submit">Login</button>
+    </form>
+    <p>Don't have an account? <a href="#register">Register</a></p>
+  </div>
+  <div id="register" class="section">
+    <h2>Register</h2>
+    <form id="register-form">
+      <input type="text" id="register-name" placeholder="Name" required>
+      <input type="email" id="register-email" placeholder="Email" required>
+      <input type="password" id="register-password" placeholder="Password" required>
+      <button type="submit">Register</button>
+    </form>
+  </div>
+  <div id="subscriptions" class="section">
+    <h2>Subscriptions</h2>
+    <div id="subscriptions-list"></div>
+  </div>
+  <div id="planner" class="section">
+    <h2>Trip Planner</h2>
+    <form id="trip-planner-form">
+      <input type="text" id="destination" placeholder="Destination (e.g., JFK, LAX)" required>
+      <input type="text" id="dates" placeholder="Dates (YYYY-MM-DD to YYYY-MM-DD)" required>
+      <input type="text" id="preferences" placeholder="Preferences (e.g., adventure, relaxation)" required>
+      <input type="number" id="budget" placeholder="Budget (£)" required>
+      <label><input type="checkbox" id="allow-topup"> Allow Top-Up</label>
+      <button type="submit">Plan Trip</button>
+    </form>
+    <div id="trip-result"></div>
+  </div>
+  <div id="referrals" class="section">
+    <h2>Referrals</h2>
+    <form id="referral-form">
+      <input type="email" id="referral-email" placeholder="Friend's Email" required>
+      <button type="submit">Refer</button>
+    </form>
+    <div id="referrals-list"></div>
+  </div>
+  <button id="get-started">Get Started</button>
+  <script src="/firebase-init.js"></script>
+  <script src="https://js.stripe.com/v3/"></script>
+  <script type="module" src="/app.js"></script>
 </body>
 </html>
