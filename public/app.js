@@ -357,6 +357,7 @@ loginForm.addEventListener('submit', async (e) => {
     try {
       const userCredential = await signInWithCustomToken(window.firebaseAuth, token);
       console.log('Login: Signed in with custom token, user:', userCredential.user.uid);
+      showSection('subscriptions');
     } catch (authError) {
       console.error('Login: Firebase auth error:', authError.code, authError.message);
       throw new Error(`Firebase auth error: ${authError.message}`);
