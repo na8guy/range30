@@ -2,7 +2,7 @@ import { signInWithCustomToken, onAuthStateChanged, signOut } from 'https://www.
 import { getToken } from 'https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging.js';
 
 const BACKEND_URL = 'https://range30.onrender.com';
-const stripe = Stripe('pk_live_Dg82e49VRbGtBVT8Y9gF4v6d'); // Replace with your Stripe publishable key
+const stripe = Stripe('pk_test_51YOURSTRIPEPUBLISHABLEKEY');
 
 // DOM elements
 const getStartedBtn = document.getElementById('get-started');
@@ -20,6 +20,10 @@ const referralsList = document.getElementById('referrals-list');
 const loginForm = document.getElementById('login-form');
 const registerForm = document.getElementById('register-form');
 const loading = document.getElementById('loading');
+const destinationInput = document.getElementById('destination');
+const suggestionsContainer = document.createElement('div');
+suggestionsContainer.id = 'destination-suggestions';
+destinationInput.parentNode.appendChild(suggestionsContainer);
 
 // Navigation
 document.querySelectorAll('nav a').forEach(link => {
@@ -137,7 +141,7 @@ async function fetchSubscriptions() {
     if (!response.ok) {
       const text = await response.text();
       console.error('Subscriptions fetch failed:', { status: response.status, statusText: response.statusText, responseText: text });
-      throw new Error(`HTTP error! Status: ${response.status}, Response: ${text.slice(0, 100)}`);
+      throw new Error(`HTTP error! Status: ${response.status}, Response: ${text}`);
     }
     const subscriptions = await response.json();
     if (!subscriptions || subscriptions.length === 0) {
@@ -182,7 +186,7 @@ async function subscribe(subscriptionId) {
     if (!response.ok) {
       const text = await response.text();
       console.error('Checkout session fetch failed:', { status: response.status, statusText: response.statusText, responseText: text });
-      throw new Error(`HTTP error! Status: ${response.status}, Response: ${text.slice(0, 100)}`);
+      throw new Error(`HTTP error! Status: ${response.status}, Response: ${text}`);
     }
     const { sessionId } = await response.json();
     await stripe.redirectToCheckout({ sessionId });
@@ -192,6 +196,41 @@ async function subscribe(subscriptionId) {
   }
   loading.style.display = 'none';
 }
+
+// Destination suggestions
+async function fetchSuggestions(query) {
+  try {
+    const response = await fetch(`${BACKEND_URL}/api/destination-suggestions?query=${encodeURIComponent(query)}`);
+    if (!response.ok) {
+      throw new Error('Failed to fetch suggestions');
+    }
+    const suggestions = await response.json();
+    suggestionsContainer.innerHTML = suggestions.map(s => `
+      <div class="suggestion" data-code="${s.code}">${s.name} (${s.code}) - ${s.city}, ${s.country}</div>
+    `).join('');
+    suggestionsContainer.style.display = suggestions.length ? 'block' : 'none';
+    document.querySelectorAll('.suggestion').forEach(item => {
+      item.addEventListener('click', () => {
+        destinationInput.value = item.dataset.code;
+        suggestionsContainer.innerHTML = '';
+        suggestionsContainer.style.display = 'none';
+      });
+    });
+  } catch (error) {
+    console.error('Suggestions error:', error);
+    suggestionsContainer.innerHTML = '<p>Error loading suggestions</p>';
+  }
+}
+
+destinationInput.addEventListener('input', (e) => {
+  const query = e.target.value.trim();
+  if (query.length >= 2) {
+    fetchSuggestions(query);
+  } else {
+    suggestionsContainer.innerHTML = '';
+    suggestionsContainer.style.display = 'none';
+  }
+});
 
 // Trip planner
 tripPlannerForm.addEventListener('submit', async (e) => {
@@ -229,17 +268,21 @@ tripPlannerForm.addEventListener('submit', async (e) => {
       });
       throw new Error(`HTTP error! Status: ${response.status}, Response: ${text}`);
     }
-    const trip = await response.json();
-    console.log('Trip plan received:', trip);
-    tripResult.innerHTML = `
-      <h3>Trip to ${trip.destination}</h3>
-      <p>Cost: £${trip.cost}</p>
-      <p>Activities: ${trip.activities.join(', ')}</p>
-      <p>Hotels: ${trip.hotels.join(', ')}</p>
-      <p>Flights: ${trip.flights.join(', ')}</p>
-      <p>Carbon Footprint: ${trip.carbonFootprint} kg</p>
-      ${trip.topUpRequired ? `<p>Top-Up Required: £${trip.topUpAmount}</p><button onclick="topUp(${trip.topUpAmount}, '${user.uid}')">Top Up</button>` : ''}
-    `;
+    const plans = await response.json();
+    console.log('Trip plans received:', plans);
+    tripResult.innerHTML = plans.map((plan, index) => `
+      <div class="trip-plan">
+        <h3>${plan.planType.charAt(0).toUpperCase() + plan.planType.slice(1)} Trip to ${plan.destination}</h3>
+        ${plan.error ? `<p>Error: ${plan.error}</p>` : `
+          <p>Cost: £${plan.cost}</p>
+          <p>Activities: ${plan.activities.join(', ')}</p>
+          <p>Hotels: ${plan.hotels.join(', ')}</p>
+          <p>Flights: ${plan.flights.join(', ')}</p>
+          <p>Carbon Footprint: ${plan.carbonFootprint} kg</p>
+          ${plan.topUpRequired ? `<p>Top-Up Required: £${plan.topUpAmount}</p><button onclick="topUp(${plan.topUpAmount}, '${user.uid}')">Top Up</button>` : ''}
+        `}
+      </div>
+    `).join('');
   } catch (error) {
     console.error('Trip planner error:', error.message, error.stack);
     tripResult.innerHTML = `<p>Error planning trip: ${error.message}</p>`;
@@ -266,7 +309,7 @@ async function topUp(amount, userId) {
     if (!response.ok) {
       const text = await response.text();
       console.error('Top-up fetch failed:', { status: response.status, statusText: response.statusText, responseText: text });
-      throw new Error(`HTTP error! Status: ${response.status}, Response: ${text.slice(0, 100)}`);
+      throw new Error(`HTTP error! Status: ${response.status}, Response: ${text}`);
     }
     const { sessionId } = await response.json();
     await stripe.redirectToCheckout({ sessionId });
@@ -298,7 +341,7 @@ referralForm.addEventListener('submit', async (e) => {
     if (!response.ok) {
       const text = await response.text();
       console.error('Referral fetch failed:', { status: response.status, statusText: response.statusText, responseText: text });
-      throw new Error(`HTTP error! Status: ${response.status}, Response: ${text.slice(0, 100)}`);
+      throw new Error(`HTTP error! Status: ${response.status}, Response: ${text}`);
     }
     await response.json();
     fetchReferrals();
@@ -325,7 +368,7 @@ async function fetchReferrals() {
     if (!response.ok) {
       const text = await response.text();
       console.error('Referrals fetch failed:', { status: response.status, statusText: response.statusText, responseText: text });
-      throw new Error(`HTTP error! Status: ${response.status}, Response: ${text.slice(0, 100)}`);
+      throw new Error(`HTTP error! Status: ${response.status}, Response: ${text}`);
     }
     const referrals = await response.json();
     referralsList.innerHTML = referrals.length
@@ -358,7 +401,7 @@ loginForm.addEventListener('submit', async (e) => {
     if (!response.ok) {
       const text = await response.text();
       console.error('Login fetch failed:', { status: response.status, statusText: response.statusText, responseText: text });
-      throw new Error(`HTTP error! Status: ${response.status}, Message: ${text.slice(0, 100)}`);
+      throw new Error(`HTTP error! Status: ${response.status}, Message: ${text}`);
     }
     const { token, userId } = await response.json();
     console.log('Login: Received Firebase custom token, user ID:', userId);
@@ -398,7 +441,7 @@ registerForm.addEventListener('submit', async (e) => {
     if (!response.ok) {
       const text = await response.text();
       console.error('Register fetch failed:', { status: response.status, statusText: response.statusText, responseText: text });
-      throw new Error(`HTTP error! Status: ${response.status}, Message: ${text.slice(0, 100)}`);
+      throw new Error(`HTTP error! Status: ${response.status}, Message: ${text}`);
     }
     const { token, userId } = await response.json();
     console.log('Register: Received Firebase custom token, user ID:', userId);

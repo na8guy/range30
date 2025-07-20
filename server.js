@@ -66,7 +66,8 @@ const tripSchema = new mongoose.Schema({
   flights: [String],
   carbonFootprint: Number,
   topUpRequired: Boolean,
-  topUpAmount: Number
+  topUpAmount: Number,
+  planType: String
 });
 
 const User = mongoose.model('User', userSchema);
@@ -92,14 +93,10 @@ const authMiddleware = async (req, res, next) => {
 };
 
 // Validate IATA code
-async function validateIataCode(code) {
+async function validateIataCode(code, amadeus) {
   try {
-    const amadeus = new Amadeus({
-      clientId: process.env.AMADEUS_API_KEY,
-      clientSecret: process.env.AMADEUS_API_SECRET
-    });
     const response = await amadeus.referenceData.locations.get({
-      subType: 'AIRPORT',
+      subType: 'AIRPORT,CITY',
       keyword: code
     });
     return response.data.length > 0;
@@ -292,6 +289,35 @@ app.post('/api/save-notification-token', authMiddleware, async (req, res) => {
   }
 });
 
+// Destination Suggestions
+app.get('/api/destination-suggestions', async (req, res) => {
+  try {
+    const { query } = req.query;
+    if (!query) {
+      return res.status(400).json({ error: 'Missing query parameter' });
+    }
+    const amadeus = new Amadeus({
+      clientId: process.env.AMADEUS_API_KEY,
+      clientSecret: process.env.AMADEUS_API_SECRET
+    });
+    const response = await amadeus.referenceData.locations.get({
+      subType: 'AIRPORT,CITY',
+      keyword: query.toUpperCase(),
+      page: { limit: 10 }
+    });
+    const suggestions = response.data.map(loc => ({
+      code: loc.iataCode || loc.id,
+      name: loc.name || loc.address.cityName,
+      city: loc.address?.cityName || loc.name,
+      country: loc.address?.countryName || 'Unknown'
+    }));
+    res.json(suggestions);
+  } catch (error) {
+    console.error('Destination suggestions error:', error.response?.data || error.message);
+    res.status(500).json({ error: 'Failed to fetch destination suggestions' });
+  }
+});
+
 // Trip Planner
 app.post('/api/ai-trip-planner', authMiddleware, async (req, res) => {
   try {
@@ -310,13 +336,6 @@ app.post('/api/ai-trip-planner', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'Invalid date format. Use YYYY-MM-DD to YYYY-MM-DD' });
     }
 
-    // Validate destination IATA code
-    const isValidDestination = await validateIataCode(destination.toUpperCase());
-    if (!isValidDestination) {
-      console.error('Invalid destination IATA code:', destination);
-      return res.status(400).json({ error: `Invalid destination code: ${destination}` });
-    }
-
     // Validate environment variables
     if (!process.env.AMADEUS_API_KEY || !process.env.AMADEUS_API_SECRET) {
       console.error('Missing Amadeus API credentials');
@@ -327,88 +346,102 @@ app.post('/api/ai-trip-planner', authMiddleware, async (req, res) => {
       return res.status(500).json({ error: 'Server error: OpenAI API key not configured' });
     }
 
-    // Fetch flight and hotel data from Amadeus
+    // Initialize Amadeus
     const amadeus = new Amadeus({
       clientId: process.env.AMADEUS_API_KEY,
       clientSecret: process.env.AMADEUS_API_SECRET
     });
 
-    let flightOffers, hotelOffers;
+    // Validate destination
+    const isValidDestination = await validateIataCode(destination.toUpperCase(), amadeus);
+    if (!isValidDestination) {
+      console.error('Invalid destination IATA code:', destination);
+      return res.status(400).json({ error: `Invalid destination code: ${destination}` });
+    }
+
+    // Fetch flight and hotel data
+    let flightOffers = { data: [] }, hotelOffers = { data: [] };
     try {
-      console.log('Fetching flight offers from Amadeus:', { origin: 'LON', destination: destination.toUpperCase(), startDate, endDate, budget });
+      console.log('Fetching flight offers:', { origin: 'LON', destination: destination.toUpperCase(), startDate, endDate, budget });
       flightOffers = await amadeus.shopping.flightOffersSearch.get({
         originLocationCode: 'LON',
         destinationLocationCode: destination.toUpperCase(),
         departureDate: startDate,
         returnDate: endDate,
         adults: 1,
-        maxPrice: Math.floor(budget),
-        currencyCode: 'GBP'
+        maxPrice: Math.floor(budget * 1.5), // Allow higher budget for luxury
+        currencyCode: 'GBP',
+        max: 10
       });
-      if (!flightOffers.data || flightOffers.data.length === 0) {
-        console.warn('No flight offers found for:', { destination, startDate, endDate });
-        flightOffers = { data: [] };
-      }
     } catch (amadeusError) {
       console.error('Amadeus flight search error:', amadeusError.response?.data || amadeusError.message);
-      return res.status(500).json({ error: `Failed to fetch flight data from Amadeus: ${amadeusError.message}` });
+      return res.status(500).json({ error: `Failed to fetch flight data from Amadeus: ${amadeusError.message || 'Unknown error'}` });
     }
 
     try {
-      console.log('Fetching hotel offers from Amadeus:', { cityCode: destination.toUpperCase(), startDate, endDate });
-      hotelOffers = await amadeus.shopping.hotelOffers.get({
+      console.log('Fetching hotel offers:', { cityCode: destination.toUpperCase(), startDate, endDate });
+      hotelOffers = await amadeus.shopping.hotelOffersSearch.get({
         cityCode: destination.toUpperCase(),
         checkInDate: startDate,
-        checkOutDate: endDate
+        checkOutDate: endDate,
+        adults: 1,
+        max: 10
       });
-      if (!hotelOffers.data || hotelOffers.data.length === 0) {
-        console.warn('No hotel offers found for:', { destination, startDate, endDate });
-        hotelOffers = { data: [] };
-      }
     } catch (amadeusError) {
       console.error('Amadeus hotel search error:', amadeusError.response?.data || amadeusError.message);
-      return res.status(500).json({ error: `Failed to fetch hotel data from Amadeus: ${amadeusError.message}` });
+      return res.status(500).json({ error: `Failed to fetch hotel data from Amadeus: ${amadeusError.message || 'Unknown error'}` });
     }
 
-    // Generate trip plan with OpenAI
+    // Generate multiple trip plans
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    const prompt = `Plan a trip to ${destination} from ${startDate} to ${endDate} with a budget of £${budget}. Preferences: ${preferences}. Include activities, hotels, and flights. Return a list of activities starting with "-".`;
-    let completion;
-    try {
-      console.log('Generating trip plan with OpenAI:', { prompt });
-      completion = await openai.chat.completions.create({
-        model: 'gpt-3.5-turbo',
-        messages: [{ role: 'user', content: prompt }],
-        max_tokens: 500
-      });
-    } catch (openaiError) {
-      console.error('OpenAI error:', openaiError.response?.data || openaiError.message);
-      return res.status(500).json({ error: `Failed to generate trip plan with OpenAI: ${openaiError.message}` });
+    const plans = [];
+    const planTypes = [
+      { type: 'budget', budgetFactor: 0.8, maxFlights: 1, maxHotels: 1 },
+      { type: 'mid-range', budgetFactor: 1.0, maxFlights: 2, maxHotels: 2 },
+      { type: 'luxury', budgetFactor: 1.5, maxFlights: 3, maxHotels: 3 }
+    ];
+
+    for (const plan of planTypes) {
+      const planBudget = budget * plan.budgetFactor;
+      const prompt = `Plan a ${plan.type} trip to ${destination} from ${startDate} to ${endDate} with a budget of £${planBudget}. Preferences: ${preferences}. Include activities, hotels, and flights. Return a list of activities starting with "-".`;
+      try {
+        console.log('Generating trip plan:', { type: plan.type, prompt });
+        const completion = await openai.chat.completions.create({
+          model: 'gpt-3.5-turbo',
+          messages: [{ role: 'user', content: prompt }],
+          max_tokens: 500
+        });
+
+        const filteredFlights = flightOffers.data
+          .filter(f => parseFloat(f.price.total) <= planBudget)
+          .slice(0, plan.maxFlights);
+        const filteredHotels = hotelOffers.data
+          .filter(h => parseFloat(h.offers[0]?.price.total || Infinity) <= planBudget)
+          .slice(0, plan.maxHotels);
+
+        const cost = calculateTotalCost(filteredFlights, filteredHotels);
+        const tripPlan = {
+          destination,
+          cost,
+          activities: completion.choices[0].message.content.split('\n').filter(line => line.startsWith('-')),
+          hotels: filteredHotels.length ? filteredHotels.map(h => h.name || 'Unknown Hotel') : ['No hotels available'],
+          flights: filteredFlights.length ? filteredFlights.map(f => f.itineraries[0].segments[0].departure.iataCode || 'Unknown Flight') : ['No flights available'],
+          carbonFootprint: calculateCarbonFootprint(filteredFlights),
+          topUpRequired: allowTopUp && cost > budget,
+          topUpAmount: cost > budget ? cost - budget : 0,
+          planType: plan.type
+        };
+
+        await Trip.create({ userId, ...tripPlan });
+        plans.push(tripPlan);
+      } catch (openaiError) {
+        console.error('OpenAI error for plan:', plan.type, openaiError.response?.data || openaiError.message);
+        plans.push({ planType: plan.type, error: `Failed to generate ${plan.type} plan: ${openaiError.message}` });
+      }
     }
 
-    const cost = calculateTotalCost(flightOffers, hotelOffers);
-    const tripPlan = {
-      destination,
-      cost,
-      activities: completion.choices[0].message.content.split('\n').filter(line => line.startsWith('-')),
-      hotels: hotelOffers.data.length ? hotelOffers.data.map(h => h.name || 'Unknown Hotel') : ['No hotels available'],
-      flights: flightOffers.data.length ? flightOffers.data.map(f => f.itineraries[0].segments[0].departure.iataCode || 'Unknown Flight') : ['No flights available'],
-      carbonFootprint: calculateCarbonFootprint(flightOffers),
-      topUpRequired: allowTopUp && cost > budget,
-      topUpAmount: cost > budget ? cost - budget : 0
-    };
-
-    // Save to MongoDB
-    try {
-      await Trip.create({ userId, ...tripPlan });
-      console.log('Trip plan saved for user:', userId);
-    } catch (mongoError) {
-      console.error('MongoDB error:', mongoError.message);
-      return res.status(500).json({ error: 'Failed to save trip plan to database' });
-    }
-
-    console.log('Trip plan generated for user:', userId, tripPlan);
-    res.json(tripPlan);
+    console.log('Trip plans generated for user:', userId, plans);
+    res.json(plans);
   } catch (error) {
     console.error('Trip planner error:', error.message, error.stack);
     res.status(500).json({ error: `Server error: ${error.message}` });
@@ -416,14 +449,14 @@ app.post('/api/ai-trip-planner', authMiddleware, async (req, res) => {
 });
 
 // Placeholder functions
-function calculateTotalCost(flightOffers, hotelOffers) {
-  const flightCost = flightOffers.data[0]?.price?.total || 0;
-  const hotelCost = hotelOffers.data[0]?.offers[0]?.price?.total || 0;
-  return parseFloat(flightCost) + parseFloat(hotelCost) || 100; // Fallback cost
+function calculateTotalCost(flights, hotels) {
+  const flightCost = flights.reduce((sum, f) => sum + parseFloat(f.price?.total || 0), 0);
+  const hotelCost = hotels.reduce((sum, h) => sum + parseFloat(h.offers[0]?.price.total || 0), 0);
+  return (flightCost + hotelCost) || 100;
 }
 
-function calculateCarbonFootprint(flightOffers) {
-  return flightOffers.data[0]?.itineraries[0]?.segments.length * 100 || 100; // Example
+function calculateCarbonFootprint(flights) {
+  return flights.reduce((sum, f) => sum + (f.itineraries[0]?.segments.length * 100 || 100), 0);
 }
 
 // Catch-all route for frontend

@@ -1,189 +1,113 @@
 body {
-    font-family: 'Arial', sans-serif;
-    margin: 0;
-    padding: 0;
-    background-color: #f4f4f4;
-    color: #333;
-}
-
-
-header {
-    background: linear-gradient(to right, #007bff, #0056b3);
-    color: white;
-    text-align: center;
-    padding: 2em;
-    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
-}
-
-header h1 {
-    margin: 0;
-    font-size: 2.5em;
+  font-family: Arial, sans-serif;
+  margin: 0;
+  padding: 0;
+  background-color: #f4f4f4;
 }
 
 nav {
-    margin-top: 1em;
+  background-color: #333;
+  padding: 10px;
 }
 
 nav a {
-    color: white;
-    margin: 0 1.5em;
-    text-decoration: none;
-    font-size: 1.2em;
-    transition: color 0.3s;
+  color: white;
+  margin: 0 10px;
+  text-decoration: none;
 }
 
 nav a:hover {
-    color: #f4f4f4;
-    text-decoration: underline;
-}
-
-main {
-    max-width: 900px;
-    margin: 2em auto;
-    padding: 0 1em;
+  text-decoration: underline;
 }
 
 .section {
-    background: white;
-    padding: 2em;
-    border-radius: 8px;
-    box-shadow: 0 0 15px rgba(0, 0, 0, 0.1);
-    margin-bottom: 2em;
-    display: none;
+  display: none;
+  padding: 20px;
 }
 
 .section.active {
-    display: block;
-}
-
-#hero {
-    text-align: center;
-    background: url('https://source.unsplash.com/random/1200x400/?travel') no-repeat center center/cover;
-    color: white;
-    padding: 3em;
-    border-radius: 8px;
-}
-
-#hero h2 {
-    font-size: 2em;
-    margin-bottom: 0.5em;
-}
-
-#hero button {
-    background-color: #28a745;
-    color: white;
-    border: none;
-    padding: 0.8em 1.5em;
-    font-size: 1.2em;
-    cursor: pointer;
-    border-radius: 5px;
-    transition: background-color 0.3s;
-}
-
-#hero button:hover {
-    background-color: #218838;
-}
-
-#loading {
-    text-align: center;
-    font-size: 1.2em;
-    color: #007bff;
-    padding: 1em;
-}
-
-form {
-    display: flex;
-    flex-direction: column;
-    gap: 1em;
-    max-width: 500px;
-    margin: 0 auto;
-}
-
-form input, form button {
-    padding: 0.8em;
-    font-size: 1em;
-    border: 1px solid #ccc;
-    border-radius: 5px;
-    width: 100%;
-    box-sizing: border-box;
-}
-
-form input:focus {
-    outline: none;
-    border-color: #007bff;
-    box-shadow: 0 0 5px rgba(0, 123, 255, 0.3);
-}
-
-form button {
-    background-color: #007bff;
-    color: white;
-    border: none;
-    cursor: pointer;
-    transition: background-color 0.3s;
-}
-
-form button:hover {
-    background-color: #0056b3;
-}
-
-form a {
-    color: #007bff;
-    text-decoration: none;
-    text-align: center;
-}
-
-form a:hover {
-    text-decoration: underline;
+  display: block;
 }
 
 .subscription-card {
-    background: #f9f9f9;
-    padding: 1.5em;
-    margin: 1em 0;
-    border-radius: 8px;
-    box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-    transition: transform 0.3s;
+  background: white;
+  padding: 15px;
+  margin: 10px 0;
+  border-radius: 5px;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.1);
 }
 
-.subscription-card:hover {
-    transform: translateY(-5px);
+.subscribe-btn {
+  background-color: #28a745;
+  color: white;
+  border: none;
+  padding: 10px;
+  cursor: pointer;
 }
 
-.subscription-card h3 {
-    margin: 0 0 0.5em;
-    color: #007bff;
+.subscribe-btn:hover {
+  background-color: #218838;
 }
 
-.subscription-card p {
-    margin: 0.5em 0;
+#loading {
+  display: none;
+  text-align: center;
+  padding: 20px;
+  background: white;
+  margin: 10px;
+  border-radius: 5px;
 }
 
-.subscription-card ul {
-    list-style: none;
-    padding: 0;
+form {
+  background: white;
+  padding: 20px;
+  margin: 10px 0;
+  border-radius: 5px;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.1);
 }
 
-.subscription-card li {
-    margin: 0.5em 0;
+input, button {
+  margin: 5px 0;
+  padding: 8px;
+  width: 100%;
+  box-sizing: border-box;
 }
 
-.subscription-card button {
-    background-color: #28a745;
-    color: white;
-    border: none;
-    padding: 0.6em 1.2em;
-    cursor: pointer;
-    border-radius: 5px;
-    transition: background-color 0.3s;
+button {
+  background-color: #007bff;
+  color: white;
+  border: none;
+  cursor: pointer;
 }
 
-.subscription-card button:hover {
-    background-color: #218838;
+button:hover {
+  background-color: #0056b3;
 }
 
-#trip-result, #referrals-list {
-    margin-top: 1.5em;
-    padding: 1em;
-    background: #f9f9f9;
-    border-radius: 8px;
+#destination-suggestions {
+  position: absolute;
+  background: white;
+  border: 1px solid #ccc;
+  max-height: 200px;
+  overflow-y: auto;
+  width: 100%;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+  display: none;
+}
+
+.suggestion {
+  padding: 10px;
+  cursor: pointer;
+}
+
+.suggestion:hover {
+  background-color: #f0f0f0;
+}
+
+.trip-plan {
+  background: white;
+  padding: 15px;
+  margin: 10px 0;
+  border-radius: 5px;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.1);
 }
