@@ -4,7 +4,7 @@ import { getToken } from 'https://www.gstatic.com/firebasejs/9.23.0/firebase-mes
 const BACKEND_URL = 'https://range30.onrender.com';
 const auth = window.firebaseAuth;
 const messaging = window.firebaseMessaging;
-const stripe = Stripe('pk_live_Dg82e49VRbGtBVT8Y9gF4v6d'); // Replace with your Stripe publishable key
+const stripe = Stripe('pk_test_51YOURSTRIPEPUBLISHABLEKEY'); // Replace with your Stripe publishable key
 
 // DOM elements
 const getStartedBtn = document.getElementById('get-started');
@@ -38,12 +38,32 @@ function showSection(sectionId) {
   });
 }
 
+// Wait for Firebase initialization
+async function waitForFirebase() {
+  const maxAttempts = 10;
+  let attempts = 0;
+  while (!window.firebaseInitialized && attempts < maxAttempts) {
+    await new Promise(resolve => setTimeout(resolve, 500));
+    attempts++;
+  }
+  if (!window.firebaseInitialized) {
+    console.error('Firebase initialization timed out');
+    document.getElementById('loading').innerText = 'Authentication service unavailable';
+    document.getElementById('loading').style.display = 'block';
+    return false;
+  }
+  return true;
+}
+
 // Authentication state
-if (!auth) {
-  console.error('Firebase Auth not initialized');
-  document.getElementById('loading').innerText = 'Authentication service unavailable';
-  document.getElementById('loading').style.display = 'block';
-} else {
+async function initializeAuth() {
+  if (!(await waitForFirebase())) return;
+  if (!auth) {
+    console.error('Firebase Auth not initialized');
+    document.getElementById('loading').innerText = 'Authentication service unavailable';
+    document.getElementById('loading').style.display = 'block';
+    return;
+  }
   onAuthStateChanged(auth, user => {
     if (user) {
       authNav.innerHTML = `<a href="#logout">Logout</a>`;
@@ -83,14 +103,14 @@ async function fetchSubscriptions() {
     `).join('');
   } catch (error) {
     console.error('Error fetching subscriptions:', error);
-    subscriptionsList.innerHTML = '<p>Error loading subscriptions: ${error.message}</p>';
+    subscriptionsList.innerHTML = `<p>Error loading subscriptions: ${error.message}</p>`;
   }
   loading.style.display = 'none';
 }
 
 // Subscribe with Stripe
 async function subscribe(subscriptionId) {
-  if (!auth.currentUser) {
+  if (!(await waitForFirebase()) || !auth.currentUser) {
     alert('Please log in to subscribe');
     showSection('login');
     return;
@@ -119,7 +139,7 @@ async function subscribe(subscriptionId) {
 // Trip planner
 tripPlannerForm.addEventListener('submit', async (e) => {
   e.preventDefault();
-  if (!auth.currentUser) {
+  if (!(await waitForFirebase()) || !auth.currentUser) {
     alert('Please log in to plan a trip');
     showSection('login');
     return;
@@ -162,7 +182,7 @@ tripPlannerForm.addEventListener('submit', async (e) => {
 
 // Top-up with Stripe
 async function topUp(amount, userId) {
-  if (!auth.currentUser) {
+  if (!(await waitForFirebase()) || !auth.currentUser) {
     alert('Please log in to top up');
     showSection('login');
     return;
@@ -190,7 +210,7 @@ async function topUp(amount, userId) {
 // Referrals
 referralForm.addEventListener('submit', async (e) => {
   e.preventDefault();
-  if (!auth.currentUser) {
+  if (!(await waitForFirebase()) || !auth.currentUser) {
     alert('Please log in to submit a referral');
     showSection('login');
     return;
@@ -217,7 +237,7 @@ referralForm.addEventListener('submit', async (e) => {
 });
 
 async function fetchReferrals() {
-  if (!auth.currentUser) {
+  if (!(await waitForFirebase()) || !auth.currentUser) {
     referralsList.innerHTML = '<p>Please log in to view referrals</p>';
     return;
   }
@@ -245,7 +265,7 @@ async function fetchReferrals() {
 // Login
 loginForm.addEventListener('submit', async (e) => {
   e.preventDefault();
-  if (!auth) {
+  if (!(await waitForFirebase()) || !auth) {
     alert('Authentication service unavailable');
     return;
   }
@@ -273,7 +293,7 @@ loginForm.addEventListener('submit', async (e) => {
 // Register
 registerForm.addEventListener('submit', async (e) => {
   e.preventDefault();
-  if (!auth) {
+  if (!(await waitForFirebase()) || !auth) {
     alert('Authentication service unavailable');
     return;
   }
@@ -300,12 +320,16 @@ registerForm.addEventListener('submit', async (e) => {
 });
 
 // Get Started button
-getStartedBtn.addEventListener('click', () => {
-  showSection(auth?.currentUser ? 'subscriptions' : 'login');
+getStartedBtn.addEventListener('click', async () => {
+  if (await waitForFirebase() && auth?.currentUser) {
+    showSection('subscriptions');
+  } else {
+    showSection('login');
+  }
 });
 
 // Request notification permission
-if (messaging) {
+if (messaging && (await waitForFirebase())) {
   try {
     await messaging.requestPermission();
     const token = await getToken(messaging, { vapidKey: window.vapidKey });
@@ -318,3 +342,5 @@ if (messaging) {
     console.error('Notification permission error:', error);
   }
 }
+
+initializeAuth();

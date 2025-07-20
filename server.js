@@ -58,16 +58,24 @@ app.get('/', (req, res) => {
 
 // Endpoint for Firebase client config with VAPID key
 app.get('/api/firebase-config', (req, res) => {
-  const firebaseConfig = {
-    apiKey: process.env.FIREBASE_API_KEY,
-    authDomain: "range30trips.firebaseapp.com",
-    projectId: "range30trips",
-    storageBucket: "range30trips.firebasestorage.app",
-    messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID,
-    appId: process.env.FIREBASE_APP_ID,
-    vapidKey: process.env.FIREBASE_VAPID_KEY
-  };
-  res.json(firebaseConfig);
+  try {
+    const firebaseConfig = {
+      apiKey: process.env.FIREBASE_API_KEY,
+      authDomain: "range30-b324b.firebaseapp.com",
+      projectId: "range30-b324b",
+      storageBucket: "range30-b324b.appspot.com",
+      messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID,
+      appId: process.env.FIREBASE_APP_ID,
+      vapidKey: process.env.FIREBASE_VAPID_KEY
+    };
+    if (!firebaseConfig.apiKey || !firebaseConfig.messagingSenderId || !firebaseConfig.appId) {
+      throw new Error('Missing Firebase environment variables');
+    }
+    res.json(firebaseConfig);
+  } catch (error) {
+    console.error('Error serving Firebase config:', error.message);
+    res.status(500).json({ error: 'Failed to load Firebase configuration' });
+  }
 });
 
 // Catch-all route for client-side routing
@@ -170,7 +178,12 @@ app.post('/api/register', async (req, res) => {
     const user = new User({ name, email, password: hashedPassword, referralCode });
     await user.save();
     const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '1h' });
-    res.json({ token });
+    if (firebaseInitialized) {
+      const firebaseToken = await admin.auth().createCustomToken(user._id);
+      res.json({ token: firebaseToken });
+    } else {
+      res.status(500).json({ error: 'Firebase Admin not initialized' });
+    }
   } catch (error) {
     console.error('Registration error:', error);
     res.status(400).json({ error: 'User already exists or invalid data' });
@@ -185,7 +198,12 @@ app.post('/api/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
     const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '1h' });
-    res.json({ token });
+    if (firebaseInitialized) {
+      const firebaseToken = await admin.auth().createCustomToken(user._id);
+      res.json({ token: firebaseToken });
+    } else {
+      res.status(500).json({ error: 'Firebase Admin not initialized' });
+    }
   } catch (error) {
     console.error('Login error:', error);
     res.status(500).json({ error: 'Server error' });

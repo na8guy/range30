@@ -3,29 +3,52 @@ import { getAuth } from 'https://www.gstatic.com/firebasejs/9.23.0/firebase-auth
 import { getMessaging } from 'https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging.js';
 
 const BACKEND_URL = 'https://range30.onrender.com';
+const MAX_RETRIES = 3;
+const RETRY_DELAY = 2000; // 2 seconds
+
+async function fetchWithRetry(url, options, retries) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      const response = await fetch(url, { ...options, signal: controller.signal });
+      clearTimeout(timeoutId);
+      if (!response.ok) {
+        throw new Error(`HTTP error! Status: ${response.status}`);
+      }
+      return await response.json();
+    } catch (error) {
+      console.error(`Fetch attempt ${i + 1} failed:`, error.message);
+      if (i < retries - 1) {
+        console.log(`Retrying in ${RETRY_DELAY}ms...`);
+        await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+      } else {
+        throw error;
+      }
+    }
+  }
+}
 
 async function initializeFirebase() {
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5s timeout
-    const response = await fetch(`${BACKEND_URL}/api/firebase-config`, { signal: controller.signal });
-    clearTimeout(timeoutId);
-    if (!response.ok) {
-      throw new Error(`HTTP error! Status: ${response.status}`);
-    }
-    const firebaseConfig = await response.json();
-    if (!firebaseConfig.apiKey || !firebaseConfig.projectId) {
-      throw new Error('Invalid Firebase config');
+    console.log('Fetching Firebase config...');
+    const firebaseConfig = await fetchWithRetry(`${BACKEND_URL}/api/firebase-config`, {}, MAX_RETRIES);
+    console.log('Firebase config received:', firebaseConfig);
+    if (!firebaseConfig.apiKey || !firebaseConfig.projectId || !firebaseConfig.appId) {
+      throw new Error('Invalid Firebase config: missing required fields');
     }
     const app = initializeApp(firebaseConfig);
     window.firebaseApp = app;
     window.firebaseAuth = getAuth(app);
     window.firebaseMessaging = getMessaging(app);
     window.vapidKey = firebaseConfig.vapidKey;
+    window.firebaseInitialized = true; // Signal initialization complete
+    console.log('Firebase initialized successfully');
   } catch (error) {
-    console.error('Error initializing Firebase:', error);
-    document.getElementById('loading').innerText = 'Failed to load configuration. Please try again later.';
+    console.error('Error initializing Firebase:', error.message);
+    document.getElementById('loading').innerText = 'Failed to initialize authentication. Please try again later.';
     document.getElementById('loading').style.display = 'block';
+    window.firebaseInitialized = false;
   }
 }
 
