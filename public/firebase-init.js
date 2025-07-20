@@ -38,12 +38,21 @@ async function initializeFirebase() {
       throw new Error('Invalid Firebase config: missing required fields');
     }
     const app = initializeApp(firebaseConfig);
+    console.log('Firebase app initialized:', app.name);
+    const auth = getAuth(app);
+    if (!auth) {
+      throw new Error('Failed to initialize Firebase Auth');
+    }
+    const messaging = getMessaging(app);
+    if (!messaging) {
+      throw new Error('Failed to initialize Firebase Messaging');
+    }
     window.firebaseApp = app;
-    window.firebaseAuth = getAuth(app);
-    window.firebaseMessaging = getMessaging(app);
+    window.firebaseAuth = auth;
+    window.firebaseMessaging = messaging;
     window.vapidKey = firebaseConfig.vapidKey;
     window.firebaseInitialized = true; // Signal initialization complete
-    console.log('Firebase initialized successfully');
+    console.log('Firebase initialized successfully:', { auth: !!auth, messaging: !!messaging });
   } catch (error) {
     console.error('Error initializing Firebase:', error.message);
     document.getElementById('loading').innerText = 'Failed to initialize authentication. Please try again later.';

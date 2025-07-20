@@ -4,7 +4,7 @@ import { getToken } from 'https://www.gstatic.com/firebasejs/9.23.0/firebase-mes
 const BACKEND_URL = 'https://range30.onrender.com';
 const auth = window.firebaseAuth;
 const messaging = window.firebaseMessaging;
-const stripe = Stripe('pk_test_51YOURSTRIPEPUBLISHABLEKEY'); // Replace with your Stripe publishable key
+const stripe = Stripe('pk_live_Dg82e49VRbGtBVT8Y9gF4v6d'); // Replace with your Stripe publishable key
 
 // DOM elements
 const getStartedBtn = document.getElementById('get-started');
@@ -40,17 +40,18 @@ function showSection(sectionId) {
 
 // Wait for Firebase initialization
 async function waitForFirebase() {
-  const maxAttempts = 10;
+  const maxAttempts = 20;
   let attempts = 0;
-  while (!window.firebaseInitialized && attempts < maxAttempts) {
+  while (!window.firebaseInitialized || !window.firebaseAuth) {
+    if (attempts >= maxAttempts) {
+      console.error('Firebase initialization timed out');
+      document.getElementById('loading').innerText = 'Authentication service unavailable';
+      document.getElementById('loading').style.display = 'block';
+      return false;
+    }
     await new Promise(resolve => setTimeout(resolve, 500));
     attempts++;
-  }
-  if (!window.firebaseInitialized) {
-    console.error('Firebase initialization timed out');
-    document.getElementById('loading').innerText = 'Authentication service unavailable';
-    document.getElementById('loading').style.display = 'block';
-    return false;
+    console.log(`Waiting for Firebase auth, attempt ${attempts}`);
   }
   return true;
 }
@@ -64,20 +65,26 @@ async function initializeAuth() {
     document.getElementById('loading').style.display = 'block';
     return;
   }
-  onAuthStateChanged(auth, user => {
-    if (user) {
-      authNav.innerHTML = `<a href="#logout">Logout</a>`;
-      authNav.querySelector('a').addEventListener('click', () => {
-        signOut(auth).catch(error => console.error('Sign out error:', error));
-      });
-      fetchSubscriptions();
-      fetchReferrals();
-      showSection('subscriptions');
-    } else {
-      authNav.innerHTML = `<a href="#login">Login</a>`;
-      showSection('login');
-    }
-  });
+  try {
+    onAuthStateChanged(auth, user => {
+      if (user) {
+        authNav.innerHTML = `<a href="#logout">Logout</a>`;
+        authNav.querySelector('a').addEventListener('click', () => {
+          signOut(auth).catch(error => console.error('Sign out error:', error));
+        });
+        fetchSubscriptions();
+        fetchReferrals();
+        showSection('subscriptions');
+      } else {
+        authNav.innerHTML = `<a href="#login">Login</a>`;
+        showSection('login');
+      }
+    });
+  } catch (error) {
+    console.error('Error setting up auth listener:', error);
+    document.getElementById('loading').innerText = 'Authentication error. Please try again.';
+    document.getElementById('loading').style.display = 'block';
+  }
 }
 
 // Fetch subscriptions
