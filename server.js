@@ -52,6 +52,16 @@ app.get('/', (req, res) => {
   });
 });
 
+// Catch-all route for client-side routing
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'), err => {
+    if (err) {
+      console.error('Error serving index.html:', err);
+      res.status(500).send('Error serving frontend');
+    }
+  });
+});
+
 // MongoDB Atlas Connection with retry
 mongoose.set('strictQuery', true);
 const connectToMongoDB = async () => {
@@ -61,7 +71,7 @@ const connectToMongoDB = async () => {
       await mongoose.connect(process.env.MONGODB_URI, {
         useNewUrlParser: true,
         useUnifiedTopology: true,
-        serverSelectionTimeoutMS: 30000 // Increase timeout to 30s
+        serverSelectionTimeoutMS: 30000
       });
       console.log('Connected to MongoDB Atlas');
       return true;
@@ -72,7 +82,7 @@ const connectToMongoDB = async () => {
         console.error('MongoDB connection failed after all retries');
         return false;
       }
-      await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5s before retry
+      await new Promise(resolve => setTimeout(resolve, 5000));
     }
   }
 };

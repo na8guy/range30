@@ -3,54 +3,80 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>GlobeTrotter Subscription</title>
-  <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.production.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/babel-standalone@6.26.0/babel.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/axios@1.4.0/dist/axios.min.js"></script>
+  <title>GlobeTrotter - Plan Your Dream Trip</title>
+  <link rel="stylesheet" href="/styles.css">
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;700&display=swap" rel="stylesheet">
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging.js"></script>
   <script src="https://js.stripe.com/v3/"></script>
-  <script src="https://www.gstatic.com/firebasejs/9.6.0/firebase-app.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/9.6.0/firebase-messaging.js"></script>
-  <script async src="https://www.googletagmanager.com/gtag/js?id=G-YOURGAID"></script>
-  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
-  <style>
-    .hero-bg {
-      background-image: url('https://source.unsplash.com/random/1600x900/?travel');
-      background-size: cover;
-      background-position: center;
-      height: 600px;
-    }
-    .sticky-nav {
-      position: sticky;
-      top: 0;
-      z-index: 100;
-    }
-    .card-hover:hover {
-      transform: scale(1.05);
-      transition: transform 0.3s;
-    }
-    .chatbot-container {
-      position: fixed;
-      bottom: 20px;
-      right: 20px;
-      z-index: 1000;
-    }
-
- 
-  </style>
 </head>
 <body>
-  <div id="root"></div>
-  <div id="chatbot" className="chatbot-container"></div>
-
-  <script type="text/babel">
-    const { useState, useEffect } = React;
-
-    // Backend URL (update to Render backend URL after deployment)
-const BACKEND_URL = process.env.RENDER_BACKEND_URL || 'https://range30.onrender.com';
-
-    // Firebase Initialization
-   const firebaseConfig = {
+  <header>
+    <nav>
+      <div class="logo">GlobeTrotter</div>
+      <ul>
+        <li><a href="#home">Home</a></li>
+        <li><a href="#subscriptions">Subscriptions</a></li>
+        <li><a href="#planner">Trip Planner</a></li>
+        <li><a href="#referrals">Referrals</a></li>
+        <li id="auth-nav"><a href="#login">Login</a></li>
+      </ul>
+    </nav>
+  </header>
+  <main>
+    <section id="home">
+      <h1>Plan Your Dream Trip with GlobeTrotter</h1>
+      <p>Discover personalized travel experiences with AI-powered planning.</p>
+      <button id="get-started">Get Started</button>
+    </section>
+    <section id="subscriptions" style="display: none;">
+      <h2>Choose Your Subscription</h2>
+      <div id="subscriptions-list"></div>
+    </section>
+    <section id="planner" style="display: none;">
+      <h2>AI Trip Planner</h2>
+      <form id="trip-planner-form">
+        <input type="text" id="destination" placeholder="Destination (e.g., Paris)" required>
+        <input type="text" id="dates" placeholder="Dates (e.g., 2025-08-01 to 2025-08-07)" required>
+        <input type="text" id="preferences" placeholder="Preferences (e.g., adventure, relaxation)">
+        <input type="number" id="budget" placeholder="Budget (£)" required>
+        <label><input type="checkbox" id="allow-topup"> Allow Top-Up</label>
+        <button type="submit">Plan Trip</button>
+      </form>
+      <div id="trip-result"></div>
+    </section>
+    <section id="referrals" style="display: none;">
+      <h2>Refer a Friend</h2>
+      <form id="referral-form">
+        <input type="email" id="referral-email" placeholder="Friend's Email" required>
+        <button type="submit">Refer</button>
+      </form>
+      <div id="referrals-list"></div>
+    </section>
+    <section id="login" style="display: none;">
+      <h2>Login</h2>
+      <form id="login-form">
+        <input type="email" id="login-email" placeholder="Email" required>
+        <input type="password" id="login-password" placeholder="Password" required>
+        <button type="submit">Login</button>
+      </form>
+      <p>Don't have an account? <a href="#register">Register</a></p>
+    </section>
+    <section id="register" style="display: none;">
+      <h2>Register</h2>
+      <form id="register-form">
+        <input type="text" id="register-name" placeholder="Name" required>
+        <input type="email" id="register-email" placeholder="Email" required>
+        <input type="password" id="register-password" placeholder="Password" required>
+        <button type="submit">Register</button>
+      </form>
+    </section>
+  </main>
+  <div id="loading" style="display: none;">Loading...</div>
+  <script>
+    const BACKEND_URL = 'https://range30.onrender.com';
+    const firebaseConfig = {
   apiKey: "AIzaSyC7GQ807LDYoViQ6kvm7mXyJfXHAfuQ7F8",
   authDomain: "range30-b324b.firebaseapp.com",
   projectId: "range30-b324b",
@@ -60,521 +86,7 @@ const BACKEND_URL = process.env.RENDER_BACKEND_URL || 'https://range30.onrender.
   measurementId: "G-951QQ94NL6"
 };
     firebase.initializeApp(firebaseConfig);
-
-    // Google Analytics
-    window.dataLayer = window.dataLayer || [];
-    function gtag(){dataLayer.push(arguments);}
-    gtag('js', new Date());
-    gtag('config', 'G-YOURGAID');
-
-    // Main App Component
-    function App() {
-      const [user, setUser] = useState(null);
-      const [subscriptions, setSubscriptions] = useState([]);
-      const [itinerary, setItinerary] = useState(null);
-      const [paymentStatus, setPaymentStatus] = useState('');
-      const [isAuthenticated, setIsAuthenticated] = useState(false);
-      const [referrals, setReferrals] = useState([]);
-      const [language, setLanguage] = useState('en');
-      const stripe = window.Stripe('pk_test_51YOURSTRIPEPUBLISHABLEKEY'); // Replace with your Stripe key
-
-      // Translations
-      const translations = {
-        en: {
-          welcome: 'Welcome',
-          login: 'Login to Your Adventure',
-          plans: 'Choose Your Adventure',
-          planTrip: 'Plan Your Dream Trip',
-          dashboard: 'Your Travel Dashboard',
-          subscribe: 'Subscribe Now',
-          generateItinerary: 'Generate AI Itinerary',
-          customize: 'Customize Manually',
-          allowTopUp: 'Allow AI to suggest trips exceeding budget (requires top-up)',
-          logout: 'Logout'
-        },
-        es: {
-          welcome: 'Bienvenido',
-          login: 'Inicia sesión en tu aventura',
-          plans: 'Elige tu aventura',
-          planTrip: 'Planifica tu viaje soñado',
-          dashboard: 'Tu panel de viajes',
-          subscribe: 'Suscríbete ahora',
-          generateItinerary: 'Generar itinerario con IA',
-          customize: 'Personalizar manualmente',
-          allowTopUp: 'Permitir que la IA sugiera viajes que excedan el presupuesto (requiere recarga)',
-          logout: 'Cerrar sesión'
-        },
-        fr: {
-          welcome: 'Bienvenue',
-          login: 'Connectez-vous à votre aventure',
-          plans: 'Choisissez votre aventure',
-          planTrip: 'Planifiez votre voyage de rêve',
-          dashboard: 'Votre tableau de bord de voyage',
-          subscribe: 'Abonnez-vous maintenant',
-          generateItinerary: 'Générer un itinéraire IA',
-          customize: 'Personnaliser manuellement',
-          allowTopUp: 'Autoriser l’IA à suggérer des voyages dépassant le budget (nécessite un supplément)',
-          logout: 'Se déconnecter'
-        }
-      };
-
-      // Fetch subscriptions
-      const fetchSubscriptions = async () => {
-        try {
-          const response = await axios.get(`${BACKEND_URL}/api/subscriptions`);
-          setSubscriptions(response.data);
-        } catch (error) {
-          console.error('Error fetching subscriptions:', error);
-        }
-      };
-
-      // Fetch user profile
-      const fetchUserProfile = async () => {
-        try {
-          const response = await axios.get(`${BACKEND_URL}/api/user`, {
-            headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
-          });
-          setUser(response.data);
-          setIsAuthenticated(true);
-        } catch (error) {
-          console.error('Error fetching user:', error);
-          setIsAuthenticated(false);
-        }
-      };
-
-      // Fetch referrals
-      const fetchReferrals = async () => {
-        try {
-          const response = await axios.get(`${BACKEND_URL}/api/referrals`, {
-            headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
-          });
-          setReferrals(response.data);
-        } catch (error) {
-          console.error('Error fetching referrals:', error);
-        }
-      };
-
-      // AI Trip Planner request
-      const fetchAIItinerary = async (preferences) => {
-        try {
-          const response = await axios.post(`${BACKEND_URL}/api/ai-trip-planner`, preferences, {
-            headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
-          });
-          setItinerary(response.data);
-          gtag('event', 'generate_itinerary', { destination: preferences.destination });
-        } catch (error) {
-          console.error('Error fetching itinerary:', error);
-        }
-      };
-
-      // Handle subscription payment
-      const handlePayment = async (subscriptionId) => {
-        try {
-          const response = await axios.post(`${BACKEND_URL}/api/create-checkout-session`, {
-            subscriptionId,
-            userId: user?.id,
-          }, {
-            headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
-          });
-          const { sessionId } = response.data;
-          const { error } = await stripe.redirectToCheckout({ sessionId });
-          if (error) {
-            setPaymentStatus(`Payment error: ${error.message}`);
-          }
-          gtag('event', 'subscribe', { subscriptionId });
-        } catch (error) {
-          setPaymentStatus('Payment failed. Please try again.');
-        }
-      };
-
-      // Handle top-up payment
-      const handleTopUp = async (amount) => {
-        try {
-          const response = await axios.post(`${BACKEND_URL}/api/create-topup-session`, {
-            amount,
-            userId: user?.id,
-          }, {
-            headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
-          });
-          const { sessionId } = response.data;
-          const { error } = await stripe.redirectToCheckout({ sessionId });
-          if (error) {
-            setPaymentStatus(`Top-up error: ${error.message}`);
-          }
-          gtag('event', 'top_up', { amount });
-        } catch (error) {
-          setPaymentStatus('Top-up failed. Please try again.');
-        }
-      };
-
-      // Login Component
-      const Login = ({ onLogin }) => {
-        const [email, setEmail] = useState('');
-        const [password, setPassword] = useState('');
-
-        const handleLogin = async (e) => {
-          e.preventDefault();
-          try {
-            const response = await axios.post(`${BACKEND_URL}/api/login`, { email, password });
-            localStorage.setItem('token', response.data.token);
-            onLogin();
-            gtag('event', 'login', { method: 'email' });
-          } catch (error) {
-            setPaymentStatus('Login failed. Please check credentials.');
-          }
-        };
-
-        return (
-          <div className="p-6 max-w-md mx-auto bg-white shadow-md rounded-lg">
-            <h2 className="text-2xl font-bold mb-4 text-blue-800">{translations[language].login}</h2>
-            <form onSubmit={handleLogin} className="space-y-4">
-              <input
-                type="email"
-                placeholder="Email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="w-full p-3 border rounded focus:outline-none focus:ring-2 focus:ring-blue-600"
-                required
-              />
-              <input
-                type="password"
-                placeholder="Password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full p-3 border rounded focus:outline-none focus:ring-2 focus:ring-blue-600"
-                required
-              />
-              <button
-                type="submit"
-                className="w-full bg-blue-600 text-white px-4 py-3 rounded hover:bg-blue-700"
-              >
-                Sign In
-              </button>
-            </form>
-          </div>
-        );
-      };
-
-      // Subscription Card Component
-      const SubscriptionCard = ({ subscription }) => (
-        <div className="bg-white shadow-md rounded-lg p-6 m-4 w-80 card-hover">
-          <h3 className="text-xl font-bold text-blue-800">{subscription.name}</h3>
-          <p className="text-lg font-semibold">£{subscription.price}/month</p>
-          <p className="text-gray-600">Trip Budget: £{subscription.budget}</p>
-          <ul className="mt-2 text-sm text-gray-700">
-            {subscription.features.map((feature, index) => (
-              <li key={index} className="flex items-center">
-                <svg className="w-4 h-4 mr-2 text-green-500" fill="currentColor" viewBox="0 0 20 20">
-                  <path d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"/>
-                </svg>
-                {feature}
-              </li>
-            ))}
-          </ul>
-          <button
-            onClick={() => handlePayment(subscription._id)}
-            className="mt-4 w-full bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
-            disabled={!isAuthenticated}
-          >
-            {isAuthenticated ? translations[language].subscribe : 'Login to Subscribe'}
-          </button>
-        </div>
-      );
-
-      // AI Trip Planner Component
-      const AITripPlanner = () => {
-        const [destination, setDestination] = useState('');
-        const [dates, setDates] = useState('');
-        const [preferences, setPreferences] = useState('');
-        const [allowTopUp, setAllowTopUp] = useState(false);
-        const [customTrip, setCustomTrip] = useState(null);
-
-        const handleAIPlan = (e) => {
-          e.preventDefault();
-          fetchAIItinerary({
-            destination,
-            dates,
-            preferences,
-            budget: user?.subscription?.budget || 1000,
-            allowTopUp,
-            language,
-          });
-        };
-
-        const handleManualPlan = async () => {
-          try {
-            const response = await axios.get(`${BACKEND_URL}/api/travel-options`, {
-              params: { destination },
-              headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
-            });
-            setCustomTrip(response.data);
-          } catch (error) {
-            console.error('Error fetching travel options:', error);
-            setCustomTrip({
-              destination,
-              activities: ['Custom Activity 1', 'Custom Activity 2'],
-              hotels: ['Custom Hotel'],
-              flights: ['Custom Flight'],
-              carbonFootprint: Math.floor(Math.random() * 1000)
-            });
-          }
-        };
-
-        return (
-          <div className="p-6 bg-gray-50 rounded-lg">
-            <h2 className="text-2xl font-bold mb-4 text-blue-800">{translations[language].planTrip}</h2>
-            {!isAuthenticated ? (
-              <p className="text-gray-600">Please login to plan your trip.</p>
-            ) : (
-              <>
-                <div className="mb-4 flex space-x-4">
-                  <button
-                    onClick={handleManualPlan}
-                    className="bg-gray-600 text-white px-4 py-2 rounded hover:bg-gray-700"
-                  >
-                    {translations[language].customize}
-                  </button>
-                  <button
-                    onClick={() => setCustomTrip(null)}
-                    className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
-                  >
-                    Use AI Planner
-                  </button>
-                </div>
-                {!customTrip ? (
-                  <form onSubmit={handleAIPlan} className="space-y-4 max-w-lg mx-auto">
-                    <input
-                      type="text"
-                      placeholder="Destination (e.g., Paris)"
-                      value={destination}
-                      onChange={(e) => setDestination(e.target.value)}
-                      className="w-full p-3 border rounded focus:outline-none focus:ring-2 focus:ring-blue-600"
-                    />
-                    <input
-                      type="text"
-                      placeholder="Travel Dates (e.g., 2025-08-01 to 2025-08-07)"
-                      value={dates}
-                      onChange={(e) => setDates(e.target.value)}
-                      className="w-full p-3 border rounded focus:outline-none focus:ring-2 focus:ring-blue-600"
-                    />
-                    <textarea
-                      placeholder="Preferences (e.g., beach, culture, adventure)"
-                      value={preferences}
-                      onChange={(e) => setPreferences(e.target.value)}
-                      className="w-full p-3 border rounded focus:outline-none focus:ring-2 focus:ring-blue-600"
-                    ></textarea>
-                    <label className="flex items-center text-gray-700">
-                      <input
-                        type="checkbox"
-                        checked={allowTopUp}
-                        onChange={(e) => setAllowTopUp(e.target.checked)}
-                        className="mr-2"
-                      />
-                      {translations[language].allowTopUp}
-                    </label>
-                    <button
-                      type="submit"
-                      className="w-full bg-blue-600 text-white px-4 py-3 rounded hover:bg-blue-700"
-                    >
-                      {translations[language].generateItinerary}
-                    </button>
-                  </form>
-                ) : (
-                  <div className="mt-6 bg-white p-6 rounded-lg shadow-md">
-                    <h3 className="text-xl font-bold text-blue-800">Your Custom Itinerary for {customTrip.destination}</h3>
-                    <p><strong>Activities:</strong> {customTrip.activities.join(', ')}</p>
-                    <p><strong>Hotels:</strong> {customTrip.hotels.join(', ')}</p>
-                    <p><strong>Flights:</strong> {customTrip.flights.join(', ')}</p>
-                    <p><strong>Carbon Footprint:</strong> {customTrip.carbonFootprint} kg CO₂</p>
-                  </div>
-                )}
-                {itinerary && (
-                  <div className="mt-6 bg-white p-6 rounded-lg shadow-md">
-                    <h3 className="text-xl font-bold text-blue-800">AI-Generated Itinerary for {itinerary.destination}</h3>
-                    <p><strong>Activities:</strong> {itinerary.activities.join(', ')}</p>
-                    <p><strong>Hotels:</strong> {itinerary.hotels.join(', ')}</p>
-                    <p><strong>Flights:</strong> {itinerary.flights.join(', ')}</p>
-                    <p><strong>Carbon Footprint:</strong> {itinerary.carbonFootprint} kg CO₂</p>
-                    {itinerary.topUpRequired && (
-                      <div>
-                        <p className="text-red-600">This trip exceeds your budget by £{itinerary.topUpAmount}. Please top up to book.</p>
-                        <button
-                          onClick={() => handleTopUp(itinerary.topUpAmount)}
-                          className="mt-2 bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700"
-                        >
-                          Top Up £{itinerary.topUpAmount}
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-        );
-      };
-
-      // Referral Dashboard Component
-      const ReferralDashboard = () => (
-        <div className="p-6 bg-gray-50 rounded-lg">
-          <h2 className="text-2xl font-bold mb-4 text-blue-800">Referral Program</h2>
-          {isAuthenticated ? (
-            <>
-              <p className="text-gray-700">Invite friends and earn rewards!</p>
-              <p className="text-gray-700">Your Referral Code: <strong>{user.referralCode}</strong></p>
-              <ul className="mt-4">
-                {referrals.map((referral, index) => (
-                  <li key={index} className="text-gray-700">
-                    {referral.email} - Reward: £{referral.reward}
-                  </li>
-                ))}
-              </ul>
-            </>
-          ) : (
-            <p className="text-gray-600">Please login to view your referrals.</p>
-          )}
-        </div>
-      );
-
-      // Dashboard Component
-      const Dashboard = () => (
-        <div className="p-6 bg-gray-50 rounded-lg">
-          <h2 className="text-2xl font-bold mb-4 text-blue-800">{translations[language].dashboard}</h2>
-          {isAuthenticated ? (
-            <>
-              <p className="text-gray-700">{translations[language].welcome}, {user.name}!</p>
-              <p className="text-gray-700">Email: {user.email}</p>
-              <p className="text-gray-700">Subscription: {user.subscription?.name || 'None'}</p>
-              <p className="text-gray-700">Payment Status: {paymentStatus || 'No payments yet'}</p>
-            </>
-          ) : (
-            <p className="text-gray-600">Please login to view your dashboard.</p>
-          )}
-        </div>
-      );
-
-      // Hero Section
-      const Hero = () => (
-        <div className="hero-bg flex items-center justify-center text-white">
-          <div className="text-center">
-            <h1 className="text-5xl font-bold mb-4">Discover Your World with GlobeTrotter</h1>
-            <p className="text-xl mb-6">Affordable, all-inclusive travel subscriptions for every adventurer.</p>
-            <a href="#subscriptions" className="bg-blue-600 text-white px-6 py-3 rounded hover:bg-blue-700">
-              Explore Plans
-            </a>
-          </div>
-        </div>
-      );
-
-      // Chatbot Integration (Mock Dialogflow)
-      useEffect(() => {
-        const script = document.createElement('script');
-        script.src = 'https://www.gstatic.com/dialogflow-console/fast/messenger/bootstrap.js?v=1';
-        script.async = true;
-        document.getElementById('chatbot').appendChild(script);
-        return () => document.getElementById('chatbot').removeChild(script);
-      }, []);
-
-      // Request Firebase Notification Permission
-      useEffect(() => {
-        const messaging = firebase.messaging();
-        Notification.requestPermission().then(permission => {
-          if (permission === 'granted') {
-            messaging.getToken().then(token => {
-              axios.post(`${BACKEND_URL}/api/save-notification-token`, { token, userId: user?.id }, {
-                headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
-              });
-            });
-          }
-        });
-        fetchSubscriptions();
-        if (localStorage.getItem('token')) {
-          fetchUserProfile();
-          fetchReferrals();
-        }
-      }, []);
-
-      return (
-        <div className="min-h-screen bg-gray-100">
-          <nav className="bg-blue-800 text-white p-4 sticky-nav">
-            <div className="container mx-auto flex justify-between items-center">
-              <h1 className="text-2xl font-bold">GlobeTrotter Subscription</h1>
-              <div className="space-x-4">
-                <a href="#subscriptions" className="hover:underline">Plans</a>
-                <a href="#planner" className="hover:underline">Plan Your Trip</a>
-                <a href="#referrals" className="hover:underline">Referrals</a>
-                <a href="#dashboard" className="hover:underline">Dashboard</a>
-                <select
-                  value={language}
-                  onChange={(e) => setLanguage(e.target.value)}
-                  className="bg-blue-800 text-white border-none"
-                >
-                  <option value="en">English</option>
-                  <option value="es">Español</option>
-                  <option value="fr">Français</option>
-                </select>
-                {isAuthenticated ? (
-                  <button
-                    onClick={() => {
-                      localStorage.removeItem('token');
-                      setIsAuthenticated(false);
-                      setUser(null);
-                      gtag('event', 'logout');
-                    }}
-                    className="text-white hover:underline"
-                  >
-                    {translations[language].logout}
-                  </button>
-                ) : (
-                  <a href="#login" className="text-white hover:underline">Login</a>
-                )}
-              </div>
-            </div>
-          </nav>
-          <Hero />
-          <div className="container mx-auto py-8">
-            {!isAuthenticated && (
-              <section id="login" className="mb-12">
-                <Login onLogin={() => { fetchUserProfile(); fetchReferrals(); }} />
-              </section>
-            )}
-            <section id="subscriptions" className="mb-12">
-              <h2 className="text-3xl font-bold text-center mb-6 text-blue-800">{translations[language].plans}</h2>
-              <div className="flex flex-wrap justify-center">
-                {subscriptions.map((sub) => (
-                  <SubscriptionCard key={sub._id} subscription={sub} />
-                ))}
-              </div>
-            </section>
-            <section id="planner" className="mb-12">
-              <AITripPlanner />
-            </section>
-            <section id="referrals" className="mb-12">
-              <ReferralDashboard />
-            </section>
-            <section id="dashboard">
-              <Dashboard />
-            </section>
-            <section className="mt-12 text-center">
-              <h2 className="text-2xl font-bold mb-4 text-blue-800">Why GlobeTrotter?</h2>
-              <p className="text-gray-600 max-w-2xl mx-auto">
-                Enjoy all-inclusive travel with AI-driven personalization, eco-friendly options, and exclusive perks. Join our community and start exploring today!
-              </p>
-            </section>
-          </div>
-          <footer className="bg-blue-800 text-white p-6 text-center">
-            <p>© 2025 GlobeTrotter Subscription. All rights reserved.</p>
-            <p className="mt-2">
-              <a href="#" className="text-white hover:underline mx-2">Privacy Policy</a> |
-              <a href="#" className="text-white hover:underline mx-2">Terms of Service</a>
-            </p>
-          </footer>
-        </div>
-      );
-    }
-
-    // Render the App
-    ReactDOM.render(<App />, document.getElementById('root'));
   </script>
+  <script src="/app.js"></script>
 </body>
 </html>

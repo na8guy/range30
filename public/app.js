@@ -1,0 +1,247 @@
+// Firebase auth and messaging
+const auth = firebase.auth();
+const messaging = firebase.messaging();
+const stripe = Stripe('pk_live_Dg82e49VRbGtBVT8Y9gF4v6d'); // Replace with your Stripe publishablekey 
+
+// DOM elements
+const getStartedBtn = document.getElementById('get-started');
+const subscriptionsSection = document.getElementById('subscriptions');
+const plannerSection = document.getElementById('planner');
+const referralsSection = document.getElementById('referrals');
+const loginSection = document.getElementById('login');
+const registerSection = document.getElementById('register');
+const authNav = document.getElementById('auth-nav');
+const subscriptionsList = document.getElementById('subscriptions-list');
+const tripPlannerForm = document.getElementById('trip-planner-form');
+const tripResult = document.getElementById('trip-result');
+const referralForm = document.getElementById('referral-form');
+const referralsList = document.getElementById('referrals-list');
+const loginForm = document.getElementById('login-form');
+const registerForm = document.getElementById('register-form');
+const loading = document.getElementById('loading');
+
+// Navigation
+document.querySelectorAll('nav a').forEach(link => {
+  link.addEventListener('click', (e) => {
+    e.preventDefault();
+    const sectionId = e.target.getAttribute('href').slice(1);
+    showSection(sectionId);
+  });
+});
+
+function showSection(sectionId) {
+  [subscriptionsSection, plannerSection, referralsSection, loginSection, registerSection].forEach(section => {
+    section.style.display = section.id === sectionId ? 'block' : 'none';
+  });
+}
+
+// Authentication state
+auth.onAuthStateChanged(user => {
+  if (user) {
+    authNav.innerHTML = `<a href="#logout">Logout</a>`;
+    authNav.querySelector('a').addEventListener('click', () => auth.signOut());
+    fetchSubscriptions();
+    fetchReferrals();
+    showSection('subscriptions');
+  } else {
+    authNav.innerHTML = `<a href="#login">Login</a>`;
+    showSection('login');
+  }
+});
+
+// Fetch subscriptions
+async function fetchSubscriptions() {
+  loading.style.display = 'block';
+  try {
+    const response = await fetch(`${BACKEND_URL}/api/subscriptions`);
+    const subscriptions = await response.json();
+    subscriptionsList.innerHTML = subscriptions.map(sub => `
+      <div class="subscription-card">
+        <h3>${sub.name}</h3>
+        <p>£${sub.price}/month</p>
+        <ul>${sub.features.map(f => `<li>${f}</li>`).join('')}</ul>
+        <button onclick="subscribe('${sub._id}')">Subscribe</button>
+      </div>
+    `).join('');
+  } catch (error) {
+    console.error('Error fetching subscriptions:', error);
+    subscriptionsList.innerHTML = '<p>Error loading subscriptions</p>';
+  }
+  loading.style.display = 'none';
+}
+
+// Subscribe with Stripe
+async function subscribe(subscriptionId) {
+  loading.style.display = 'block';
+  try {
+    const user = auth.currentUser;
+    const token = await user.getIdToken();
+    const response = await fetch(`${BACKEND_URL}/api/create-checkout-session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ subscriptionId, userId: user.uid })
+    });
+    const { sessionId } = await response.json();
+    await stripe.redirectToCheckout({ sessionId });
+  } catch (error) {
+    console.error('Subscription error:', error);
+    alert('Error processing subscription');
+  }
+  loading.style.display = 'none';
+}
+
+// Trip planner
+tripPlannerForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  loading.style.display = 'block';
+  try {
+    const user = auth.currentUser;
+    const token = await user.getIdToken();
+    const response = await fetch(`${BACKEND_URL}/api/ai-trip-planner`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({
+        destination: document.getElementById('destination').value,
+        dates: document.getElementById('dates').value,
+        preferences: document.getElementById('preferences').value,
+        budget: parseFloat(document.getElementById('budget').value),
+        allowTopUp: document.getElementById('allow-topup').checked,
+        language: 'en'
+      })
+    });
+    const trip = await response.json();
+    tripResult.innerHTML = `
+      <h3>Trip to ${trip.destination}</h3>
+      <p>Cost: £${trip.cost}</p>
+      <p>Activities: ${trip.activities.join(', ')}</p>
+      <p>Hotels: ${trip.hotels.join(', ')}</p>
+      <p>Flights: ${trip.flights.join(', ')}</p>
+      <p>Carbon Footprint: ${trip.carbonFootprint} kg</p>
+      ${trip.topUpRequired ? `<p>Top-Up Required: £${trip.topUpAmount}</p><button onclick="topUp(${trip.topUpAmount}, '${user.uid}')">Top Up</button>` : ''}
+    `;
+  } catch (error) {
+    console.error('Trip planner error:', error);
+    tripResult.innerHTML = '<p>Error planning trip</p>';
+  }
+  loading.style.display = 'none';
+});
+
+// Top-up with Stripe
+async function topUp(amount, userId) {
+  loading.style.display = 'block';
+  try {
+    const token = await auth.currentUser.getIdToken();
+    const response = await fetch(`${BACKEND_URL}/api/create-topup-session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ amount, userId })
+    });
+    const { sessionId } = await response.json();
+    await stripe.redirectToCheckout({ sessionId });
+  } catch (error) {
+    console.error('Top-up error:', error);
+    alert('Error processing top-up');
+  }
+  loading.style.display = 'none';
+}
+
+// Referrals
+referralForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  loading.style.display = 'block';
+  try {
+    const user = auth.currentUser;
+    const token = await user.getIdToken();
+    const response = await fetch(`${BACKEND_URL}/api/referrals`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ email: document.getElementById('referral-email').value })
+    });
+    await response.json();
+    fetchReferrals();
+  } catch (error) {
+    console.error('Referral error:', error);
+    referralsList.innerHTML = '<p>Error submitting referral</p>';
+  }
+  loading.style.display = 'none';
+});
+
+async function fetchReferrals() {
+  loading.style.display = 'block';
+  try {
+    const user = auth.currentUser;
+    const token = await user.getIdToken();
+    const response = await fetch(`${BACKEND_URL}/api/referrals`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    const referrals = await response.json();
+    referralsList.innerHTML = referrals.map(r => `
+      <p>Referred ${r.email} - Reward: £${r.reward}</p>
+    `).join('');
+  } catch (error) {
+    console.error('Error fetching referrals:', error);
+    referralsList.innerHTML = '<p>Error loading referrals</p>';
+  }
+  loading.style.display = 'none';
+}
+
+// Login
+loginForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  loading.style.display = 'block';
+  try {
+    const email = document.getElementById('login-email').value;
+    const password = document.getElementById('login-password').value;
+    const response = await fetch(`${BACKEND_URL}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password })
+    });
+    const { token } = await response.json();
+    await auth.signInWithCustomToken(token);
+  } catch (error) {
+    console.error('Login error:', error);
+    alert('Invalid credentials');
+  }
+  loading.style.display = 'none';
+});
+
+// Register
+registerForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  loading.style.display = 'block';
+  try {
+    const name = document.getElementById('register-name').value;
+    const email = document.getElementById('register-email').value;
+    const password = document.getElementById('register-password').value;
+    const response = await fetch(`${BACKEND_URL}/api/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, email, password })
+    });
+    const { token } = await response.json();
+    await auth.signInWithCustomToken(token);
+  } catch (error) {
+    console.error('Register error:', error);
+    alert('Registration failed');
+  }
+  loading.style.display = 'none';
+});
+
+// Get Started button
+getStartedBtn.addEventListener('click', () => {
+  showSection(auth.currentUser ? 'subscriptions' : 'login');
+});
+
+// Request notification permission
+messaging.requestPermission().then(() => {
+  return messaging.getToken();
+}).then(token => {
+  fetch(`${BACKEND_URL}/api/save-notification-token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${auth.currentUser?.getIdToken()}` },
+    body: JSON.stringify({ token, userId: auth.currentUser?.uid })
+  });
+}).catch(error => {
+  console.error('Notification permission error:', error);
+});
