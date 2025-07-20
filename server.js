@@ -48,7 +48,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // Content Security Policy
 app.use((req, res, next) => {
-  res.setHeader('Content-Security-Policy', "script-src 'self' https://www.gstatic.com https://js.stripe.com; object-src 'none';");
+res.setHeader('Content-Security-Policy', "script-src 'self' https://www.gstatic.com https://js.stripe.com 'unsafe-eval'; object-src 'none';");
   next();
 });
 
