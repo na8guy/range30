@@ -53,7 +53,7 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'), err => {
     if (err) {
       console.error('Error serving index.html:', err);
-      res.status(500).send('Error serving frontend');
+      res.status(500).json({ error: 'Error serving frontend' });
     }
   });
 });
@@ -85,7 +85,7 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'), err => {
     if (err) {
       console.error('Error serving index.html:', err);
-      res.status(500).send('Error serving frontend');
+      res.status(500).json({ error: 'Error serving frontend' });
     }
   });
 });
@@ -150,28 +150,42 @@ const User = mongoose.model('User', userSchema);
 const Subscription = mongoose.model('Subscription', subscriptionSchema);
 const Trip = mongoose.model('Trip', tripSchema);
 
-// Middleware to verify JWT
-const authenticateToken = (req, res, next) => {
+// Middleware to verify Firebase ID token
+const authenticateToken = async (req, res, next) => {
   const token = req.headers['authorization']?.split(' ')[1];
-  if (!token) return res.status(401).json({ error: 'Unauthorized' });
+  if (!token) {
+    console.error('Authenticate: No token provided');
+    return res.status(401).json({ error: 'Unauthorized: No token provided' });
+  }
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = decoded;
+    if (!firebaseInitialized) {
+      throw new Error('Firebase Admin not initialized');
+    }
+    console.log('Authenticate: Verifying Firebase ID token');
+    const decodedToken = await admin.auth().verifyIdToken(token);
+    req.user = { id: decodedToken.uid };
+    console.log('Authenticate: Token verified, user ID:', decodedToken.uid);
     next();
   } catch (error) {
-    console.error('JWT verification error:', error.message);
-    res.status(403).json({ error: 'Forbidden' });
+    console.error('Authenticate: Token verification error:', error.message);
+    res.status(403).json({ error: `Forbidden: ${error.message}` });
   }
 };
 
 // Routes
 app.get('/api/subscriptions', async (req, res) => {
   try {
+    console.log('Fetching subscriptions from MongoDB');
     const subscriptions = await Subscription.find();
+    if (!subscriptions || subscriptions.length === 0) {
+      console.log('No subscriptions found in database');
+      return res.status(404).json({ error: 'No subscriptions found' });
+    }
+    console.log('Subscriptions fetched:', subscriptions.length);
     res.json(subscriptions);
   } catch (error) {
     console.error('Error fetching subscriptions:', error.message);
-    res.status(500).json({ error: 'Server error' });
+    res.status(500).json({ error: 'Server error: Failed to fetch subscriptions' });
   }
 });
 
@@ -183,6 +197,12 @@ app.post('/api/register', async (req, res) => {
     }
     if (!mongoose.connection.readyState) {
       throw new Error('MongoDB not connected');
+    }
+    console.log('Register: Checking for existing user with email:', email);
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      console.log('Register: Email already exists:', email);
+      return res.status(400).json({ error: 'Email already exists' });
     }
     const hashedPassword = await bcrypt.hash(password, 10);
     const referralCode = Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -245,27 +265,31 @@ app.post('/api/login', async (req, res) => {
 
 app.get('/api/user', authenticateToken, async (req, res) => {
   try {
+    console.log('Fetching user with ID:', req.user.id);
     const user = await User.findById(req.user.id).populate('subscription');
     if (!user) {
+      console.log('User not found for ID:', req.user.id);
       return res.status(404).json({ error: 'User not found' });
     }
     res.json(user);
   } catch (error) {
     console.error('User fetch error:', error.message);
-    res.status(500).json({ error: 'Server error' });
+    res.status(500).json({ error: 'Server error: Failed to fetch user' });
   }
 });
 
 app.get('/api/referrals', authenticateToken, async (req, res) => {
   try {
+    console.log('Fetching referrals for user ID:', req.user.id);
     const user = await User.findById(req.user.id);
     if (!user) {
+      console.log('User not found for ID:', req.user.id);
       return res.status(404).json({ error: 'User not found' });
     }
     res.json(user.referrals);
   } catch (error) {
     console.error('Referrals fetch error:', error.message);
-    res.status(500).json({ error: 'Server error' });
+    res.status(500).json({ error: 'Server error: Failed to fetch referrals' });
   }
 });
 
@@ -275,8 +299,10 @@ app.post('/api/referrals', authenticateToken, async (req, res) => {
     if (!email) {
       return res.status(400).json({ error: 'Missing email' });
     }
+    console.log('Adding referral for user ID:', req.user.id, 'with email:', email);
     const user = await User.findById(req.user.id);
     if (!user) {
+      console.log('User not found for ID:', req.user.id);
       return res.status(404).json({ error: 'User not found' });
     }
     user.referrals.push({ email, reward: 50 });
@@ -290,13 +316,14 @@ app.post('/api/referrals', authenticateToken, async (req, res) => {
     res.json(user.referrals);
   } catch (error) {
     console.error('Referral error:', error.message);
-    res.status(500).json({ error: 'Referral error' });
+    res.status(500).json({ error: 'Server error: Failed to add referral' });
   }
 });
 
 app.post('/api/ai-trip-planner', authenticateToken, async (req, res) => {
   const { destination, dates, preferences, budget, allowTopUp, language } = req.body;
   try {
+    console.log('Planning trip for user ID:', req.user.id);
     const flights = await amadeus.shopping.flightOffersSearch.get({
       originLocationCode: 'LON',
       destinationLocationCode: destination.split(',')[0].toUpperCase(),
@@ -323,13 +350,14 @@ app.post('/api/ai-trip-planner', authenticateToken, async (req, res) => {
     res.json(itinerary);
   } catch (error) {
     console.error('AI trip planner error:', error.message);
-    res.status(500).json({ error: 'Failed to plan trip' });
+    res.status(500).json({ error: 'Server error: Failed to plan trip' });
   }
 });
 
 app.get('/api/travel-options', authenticateToken, async (req, res) => {
   const { destination } = req.query;
   try {
+    console.log('Fetching travel options for user ID:', req.user.id);
     const flights = await amadeus.shopping.flightOffersSearch.get({
       originLocationCode: 'LON',
       destinationLocationCode: destination.split(',')[0].toUpperCase(),
@@ -345,15 +373,17 @@ app.get('/api/travel-options', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('Travel options error:', error.message);
-    res.status(500).json({ error: 'Failed to fetch travel options' });
+    res.status(500).json({ error: 'Server error: Failed to fetch travel options' });
   }
 });
 
 app.post('/api/create-checkout-session', authenticateToken, async (req, res) => {
   const { subscriptionId, userId } = req.body;
   try {
+    console.log('Creating checkout session for user ID:', userId, 'subscription ID:', subscriptionId);
     const subscription = await Subscription.findById(subscriptionId);
     if (!subscription) {
+      console.log('Subscription not found:', subscriptionId);
       return res.status(404).json({ error: 'Subscription not found' });
     }
     const session = await stripe.checkout.sessions.create({
@@ -375,13 +405,14 @@ app.post('/api/create-checkout-session', authenticateToken, async (req, res) => 
     res.json({ sessionId: session.id });
   } catch (error) {
     console.error('Checkout error:', error.message);
-    res.status(500).json({ error: 'Payment error' });
+    res.status(500).json({ error: 'Server error: Failed to create checkout session' });
   }
 });
 
 app.post('/api/create-topup-session', authenticateToken, async (req, res) => {
   const { amount, userId } = req.body;
   try {
+    console.log('Creating top-up session for user ID:', userId, 'amount:', amount);
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
       line_items: [{
@@ -400,18 +431,19 @@ app.post('/api/create-topup-session', authenticateToken, async (req, res) => {
     res.json({ sessionId: session.id });
   } catch (error) {
     console.error('Top-up error:', error.message);
-    res.status(500).json({ error: 'Top-up error' });
+    res.status(500).json({ error: 'Server error: Failed to create top-up session' });
   }
 });
 
 app.post('/api/save-notification-token', authenticateToken, async (req, res) => {
   const { token, userId } = req.body;
   try {
+    console.log('Saving notification token for user ID:', userId);
     await User.findByIdAndUpdate(userId, { notificationToken: token });
     res.json({ message: 'Notification token saved' });
   } catch (error) {
     console.error('Notification token error:', error.message);
-    res.status(500).json({ error: 'Notification token error' });
+    res.status(500).json({ error: 'Server error: Failed to save notification token' });
   }
 });
 
