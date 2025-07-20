@@ -95,6 +95,7 @@ async function initializeAuth() {
   console.log('Starting auth initialization...');
   if (!(await waitForFirebase())) {
     console.error('Failed to initialize auth due to timeout');
+    alert('Authentication service unavailable. Please try again later or contact support.');
     return;
   }
   const auth = window.firebaseAuth;

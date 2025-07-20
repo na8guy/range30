@@ -45,5 +45,3 @@ async function initFirebase() {
 }
 
 initFirebase();
-
-export { window as firebase };
