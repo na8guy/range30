@@ -21,18 +21,20 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 // Initialize Firebase Admin with error handling
 let firebaseInitialized = false;
 try {
-  if (process.env.FIREBASE_CREDENTIALS) {
-    const credentials = JSON.parse(process.env.FIREBASE_CREDENTIALS);
-    admin.initializeApp({
-      credential: admin.credential.cert(credentials)
-    });
-    firebaseInitialized = true;
-    console.log('Firebase Admin initialized successfully');
-  } else {
-    console.warn('FIREBASE_CREDENTIALS not set. Firebase features disabled.');
+  if (!process.env.FIREBASE_CREDENTIALS) {
+    throw new Error('FIREBASE_CREDENTIALS environment variable is missing');
   }
+  const credentials = JSON.parse(process.env.FIREBASE_CREDENTIALS);
+  if (!credentials.project_id || !credentials.client_email || !credentials.private_key) {
+    throw new Error('Invalid FIREBASE_CREDENTIALS: missing required fields');
+  }
+  admin.initializeApp({
+    credential: admin.credential.cert(credentials)
+  });
+  firebaseInitialized = true;
+  console.log('Firebase Admin initialized successfully');
 } catch (error) {
-  console.error('Firebase initialization error:', error.message);
+  console.error('Firebase Admin initialization error:', error.message);
 }
 
 // Middleware
@@ -152,11 +154,14 @@ const Trip = mongoose.model('Trip', tripSchema);
 const authenticateToken = (req, res, next) => {
   const token = req.headers['authorization']?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Unauthorized' });
-  jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
-    if (err) return res.status(403).json({ error: 'Forbidden' });
-    req.user = user;
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = decoded;
     next();
-  });
+  } catch (error) {
+    console.error('JWT verification error:', error.message);
+    res.status(403).json({ error: 'Forbidden' });
+  }
 };
 
 // Routes
@@ -165,7 +170,7 @@ app.get('/api/subscriptions', async (req, res) => {
     const subscriptions = await Subscription.find();
     res.json(subscriptions);
   } catch (error) {
-    console.error('Error fetching subscriptions:', error);
+    console.error('Error fetching subscriptions:', error.message);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -173,49 +178,80 @@ app.get('/api/subscriptions', async (req, res) => {
 app.post('/api/register', async (req, res) => {
   const { name, email, password } = req.body;
   try {
+    if (!name || !email || !password) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+    if (!mongoose.connection.readyState) {
+      throw new Error('MongoDB not connected');
+    }
     const hashedPassword = await bcrypt.hash(password, 10);
     const referralCode = Math.random().toString(36).substring(2, 8).toUpperCase();
     const user = new User({ name, email, password: hashedPassword, referralCode });
     await user.save();
-    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '1h' });
-    if (firebaseInitialized) {
-      const firebaseToken = await admin.auth().createCustomToken(user._id);
-      res.json({ token: firebaseToken });
-    } else {
-      res.status(500).json({ error: 'Firebase Admin not initialized' });
+    const userId = user._id.toString();
+    console.log('Register: Created user with ID:', userId);
+    const token = jwt.sign({ id: userId }, process.env.JWT_SECRET, { expiresIn: '1h' });
+    if (!firebaseInitialized) {
+      throw new Error('Firebase Admin not initialized');
     }
+    const firebaseToken = await admin.auth().createCustomToken(userId);
+    res.json({ token: firebaseToken });
   } catch (error) {
-    console.error('Registration error:', error);
-    res.status(400).json({ error: 'User already exists or invalid data' });
+    console.error('Registration error:', error.message);
+    res.status(400).json({ error: error.code === 11000 ? 'Email already exists' : 'Registration failed' });
   }
 });
 
 app.post('/api/login', async (req, res) => {
   const { email, password } = req.body;
   try {
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Missing email or password' });
+    }
+    if (!process.env.JWT_SECRET) {
+      throw new Error('JWT_SECRET environment variable is missing');
+    }
+    if (!mongoose.connection.readyState) {
+      throw new Error('MongoDB not connected');
+    }
+    console.log('Login: Querying user with email:', email);
     const user = await User.findOne({ email });
-    if (!user || !await bcrypt.compare(password, user.password)) {
+    if (!user) {
+      console.log('Login: No user found for email:', email);
       return res.status(401).json({ error: 'Invalid credentials' });
     }
-    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '1h' });
-    if (firebaseInitialized) {
-      const firebaseToken = await admin.auth().createCustomToken(user._id);
-      res.json({ token: firebaseToken });
-    } else {
-      res.status(500).json({ error: 'Firebase Admin not initialized' });
+    console.log('Login: User found:', { email: user.email, id: user._id });
+    const userId = user._id.toString();
+    if (!userId || typeof userId !== 'string') {
+      throw new Error('Invalid user ID: ' + JSON.stringify(user._id));
     }
+    const passwordMatch = await bcrypt.compare(password, user.password);
+    if (!passwordMatch) {
+      console.log('Login: Password mismatch for email:', email);
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+    const token = jwt.sign({ id: userId }, process.env.JWT_SECRET, { expiresIn: '1h' });
+    if (!firebaseInitialized) {
+      throw new Error('Firebase Admin not initialized');
+    }
+    console.log('Login: Generating Firebase token for user ID:', userId);
+    const firebaseToken = await admin.auth().createCustomToken(userId);
+    res.json({ token: firebaseToken });
   } catch (error) {
-    console.error('Login error:', error);
-    res.status(500).json({ error: 'Server error' });
+    console.error('Login error:', error.message);
+    res.status(500).json({ error: `Login failed: ${error.message}` });
   }
 });
 
 app.get('/api/user', authenticateToken, async (req, res) => {
   try {
     const user = await User.findById(req.user.id).populate('subscription');
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
     res.json(user);
   } catch (error) {
-    console.error('User fetch error:', error);
+    console.error('User fetch error:', error.message);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -223,9 +259,12 @@ app.get('/api/user', authenticateToken, async (req, res) => {
 app.get('/api/referrals', authenticateToken, async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
     res.json(user.referrals);
   } catch (error) {
-    console.error('Referrals fetch error:', error);
+    console.error('Referrals fetch error:', error.message);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -233,7 +272,13 @@ app.get('/api/referrals', authenticateToken, async (req, res) => {
 app.post('/api/referrals', authenticateToken, async (req, res) => {
   const { email } = req.body;
   try {
+    if (!email) {
+      return res.status(400).json({ error: 'Missing email' });
+    }
     const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
     user.referrals.push({ email, reward: 50 });
     if (firebaseInitialized && user.notificationToken) {
       await admin.messaging().send({
@@ -244,7 +289,7 @@ app.post('/api/referrals', authenticateToken, async (req, res) => {
     await user.save();
     res.json(user.referrals);
   } catch (error) {
-    console.error('Referral error:', error);
+    console.error('Referral error:', error.message);
     res.status(500).json({ error: 'Referral error' });
   }
 });
@@ -277,7 +322,7 @@ app.post('/api/ai-trip-planner', authenticateToken, async (req, res) => {
     await Trip.create({ ...itinerary, userId: req.user.id });
     res.json(itinerary);
   } catch (error) {
-    console.error('AI trip planner error:', error);
+    console.error('AI trip planner error:', error.message);
     res.status(500).json({ error: 'Failed to plan trip' });
   }
 });
@@ -299,7 +344,7 @@ app.get('/api/travel-options', authenticateToken, async (req, res) => {
       carbonFootprint: Math.floor(Math.random() * 1000)
     });
   } catch (error) {
-    console.error('Travel options error:', error);
+    console.error('Travel options error:', error.message);
     res.status(500).json({ error: 'Failed to fetch travel options' });
   }
 });
@@ -308,6 +353,9 @@ app.post('/api/create-checkout-session', authenticateToken, async (req, res) => 
   const { subscriptionId, userId } = req.body;
   try {
     const subscription = await Subscription.findById(subscriptionId);
+    if (!subscription) {
+      return res.status(404).json({ error: 'Subscription not found' });
+    }
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
       line_items: [{
@@ -326,7 +374,7 @@ app.post('/api/create-checkout-session', authenticateToken, async (req, res) => 
     await User.findByIdAndUpdate(userId, { subscription: subscriptionId });
     res.json({ sessionId: session.id });
   } catch (error) {
-    console.error('Checkout error:', error);
+    console.error('Checkout error:', error.message);
     res.status(500).json({ error: 'Payment error' });
   }
 });
@@ -351,7 +399,7 @@ app.post('/api/create-topup-session', authenticateToken, async (req, res) => {
     });
     res.json({ sessionId: session.id });
   } catch (error) {
-    console.error('Top-up error:', error);
+    console.error('Top-up error:', error.message);
     res.status(500).json({ error: 'Top-up error' });
   }
 });
@@ -362,7 +410,7 @@ app.post('/api/save-notification-token', authenticateToken, async (req, res) => 
     await User.findByIdAndUpdate(userId, { notificationToken: token });
     res.json({ message: 'Notification token saved' });
   } catch (error) {
-    console.error('Notification token error:', error);
+    console.error('Notification token error:', error.message);
     res.status(500).json({ error: 'Notification token error' });
   }
 });
@@ -385,15 +433,15 @@ const seedSubscriptions = async () => {
     await Subscription.insertMany(subscriptions);
     const hashedPassword = await bcrypt.hash('password123', 10);
     await User.deleteMany({});
-    await User.create({
+    const testUser = await User.create({
       name: 'Test User',
       email: 'test@example.com',
       password: hashedPassword,
       referralCode: 'TEST123'
     });
-    console.log('Database seeded successfully');
+    console.log('Database seeded successfully, test user ID:', testUser._id.toString());
   } catch (error) {
-    console.error('Seeding error:', error);
+    console.error('Seeding error:', error.message);
   }
 };
 
