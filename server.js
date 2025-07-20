@@ -145,9 +145,16 @@ app.get('/api/firebase-config', async (req, res) => {
       appId: process.env.FIREBASE_APP_ID,
       vapidKey: process.env.FIREBASE_VAPID_KEY
     };
-    if (!firebaseConfig.apiKey || !firebaseConfig.messagingSenderId || !firebaseConfig.appId) {
+    if (!firebaseConfig.apiKey || !firebaseConfig.messagingSenderId || !firebaseConfig.appId || !firebaseConfig.vapidKey) {
+      console.error('Missing Firebase environment variables:', {
+        apiKey: !!firebaseConfig.apiKey,
+        messagingSenderId: !!firebaseConfig.messagingSenderId,
+        appId: !!firebaseConfig.appId,
+        vapidKey: !!firebaseConfig.vapidKey
+      });
       throw new Error('Missing Firebase environment variables');
     }
+    console.log('Serving Firebase config');
     res.json(firebaseConfig);
   } catch (error) {
     console.error('Error serving Firebase config:', error.message);

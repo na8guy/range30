@@ -78,7 +78,7 @@ async function waitForFirebase() {
   while (!window.firebaseInitialized || !window.firebaseAuth || typeof window.firebaseAuth !== 'object') {
     if (attempts >= maxAttempts) {
       console.error('Firebase initialization timed out after', maxAttempts, 'attempts');
-      loading.innerText = 'Authentication service unavailable';
+      loading.innerText = 'Authentication service unavailable. Please check your network or try again later.';
       loading.style.display = 'block';
       return false;
     }
@@ -148,9 +148,12 @@ async function fetchSubscriptions() {
         <h3>${sub.name}</h3>
         <p>£${sub.price}/month</p>
         <ul>${sub.features.map(f => `<li>${f}</li>`).join('')}</ul>
-        <button onclick="subscribe('${sub._id}')">Subscribe</button>
+        <button class="subscribe-btn" data-sub-id="${sub._id}">Subscribe</button>
       </div>
     `).join('');
+    document.querySelectorAll('.subscribe-btn').forEach(btn => {
+      btn.addEventListener('click', () => subscribe(btn.dataset.subId));
+    });
   } catch (error) {
     console.error('Error fetching subscriptions:', error);
     subscriptionsList.innerHTML = `<p>Error loading subscriptions: ${error.message}</p>`;
@@ -331,7 +334,7 @@ async function fetchReferrals() {
 loginForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   if (!(await waitForFirebase()) || !window.firebaseAuth) {
-    alert('Authentication service unavailable');
+    alert('Authentication service unavailable. Please check your network or try again later.');
     return;
   }
   loading.style.display = 'block';
@@ -369,7 +372,7 @@ loginForm.addEventListener('submit', async (e) => {
 registerForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   if (!(await waitForFirebase()) || !window.firebaseAuth) {
-    alert('Authentication service unavailable');
+    alert('Authentication service unavailable. Please check your network or try again later.');
     return;
   }
   loading.style.display = 'block';
