@@ -26,6 +26,7 @@ document.querySelectorAll('nav a').forEach(link => {
   link.addEventListener('click', (e) => {
     e.preventDefault();
     const sectionId = e.target.getAttribute('href').slice(1);
+    console.log('Nav clicked, showing section:', sectionId);
     showSection(sectionId);
   });
 });
@@ -46,13 +47,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
 function showSection(sectionId) {
   console.log('Showing section:', sectionId);
-  [subscriptionsSection, plannerSection, referralsSection, loginSection, registerSection].forEach(section => {
+  const sections = { subscriptions: subscriptionsSection, planner: plannerSection, referrals: referralsSection, login: loginSection, register: registerSection };
+  if (!sections[sectionId]) {
+    console.error('Invalid section ID:', sectionId);
+    return showSection('login');
+  }
+  Object.values(sections).forEach(section => {
     if (section) {
       section.style.display = section.id === sectionId ? 'block' : 'none';
     } else {
-      console.error('Section not found:', sectionId);
+      console.error('Section DOM element not found:', sectionId);
     }
   });
+  if (sectionId === 'subscriptions' && window.firebaseAuth?.currentUser) {
+    fetchSubscriptions();
+    fetchReferrals();
+  }
 }
 
 // Wait for Firebase initialization
@@ -62,8 +72,8 @@ async function waitForFirebase() {
   while (!window.firebaseInitialized || !window.firebaseAuth || typeof window.firebaseAuth !== 'object') {
     if (attempts >= maxAttempts) {
       console.error('Firebase initialization timed out after', maxAttempts, 'attempts');
-      document.getElementById('loading').innerText = 'Authentication service unavailable';
-      document.getElementById('loading').style.display = 'block';
+      loading.innerText = 'Authentication service unavailable';
+      loading.style.display = 'block';
       return false;
     }
     console.log('Waiting for Firebase auth, attempt', attempts + 1, ':', {
@@ -87,8 +97,8 @@ async function initializeAuth() {
   const auth = window.firebaseAuth;
   if (!auth || typeof auth !== 'object') {
     console.error('Firebase Auth not initialized:', auth);
-    document.getElementById('loading').innerText = 'Authentication service unavailable';
-    document.getElementById('loading').style.display = 'block';
+    loading.innerText = 'Authentication service unavailable';
+    loading.style.display = 'block';
     return;
   }
   try {
@@ -100,8 +110,6 @@ async function initializeAuth() {
         authNav.querySelector('a').addEventListener('click', () => {
           signOut(auth).catch(error => console.error('Sign out error:', error));
         });
-        fetchSubscriptions();
-        fetchReferrals();
         showSection('subscriptions');
       } else {
         authNav.innerHTML = `<a href="#login">Login</a>`;
@@ -110,8 +118,8 @@ async function initializeAuth() {
     });
   } catch (error) {
     console.error('Error setting up auth listener:', error);
-    document.getElementById('loading').innerText = 'Authentication error. Please try again.';
-    document.getElementById('loading').style.display = 'block';
+    loading.innerText = 'Authentication error. Please try again.';
+    loading.style.display = 'block';
   }
 }
 
@@ -381,6 +389,7 @@ registerForm.addEventListener('submit', async (e) => {
     try {
       const userCredential = await signInWithCustomToken(window.firebaseAuth, token);
       console.log('Register: Signed in with custom token, user:', userCredential.user.uid);
+      showSection('subscriptions');
     } catch (authError) {
       console.error('Register: Firebase auth error:', authError.code, authError.message);
       throw new Error(`Firebase auth error: ${authError.message}`);

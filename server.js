@@ -1,7 +1,6 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
-const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const Stripe = require('stripe');
 const Amadeus = require('amadeus');
@@ -18,7 +17,7 @@ const amadeus = new Amadeus({
 });
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// Initialize Firebase Admin with error handling
+// Initialize Firebase Admin
 let firebaseInitialized = false;
 try {
   if (!process.env.FIREBASE_CREDENTIALS) {
@@ -48,9 +47,34 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // Content Security Policy
 app.use((req, res, next) => {
-res.setHeader('Content-Security-Policy', "script-src 'self' https://www.gstatic.com https://js.stripe.com 'unsafe-eval'; object-src 'none';");
+  res.setHeader('Content-Security-Policy', "script-src 'self' https://www.gstatic.com https://js.stripe.com 'unsafe-eval'; object-src 'none';");
   next();
 });
+
+// MongoDB Atlas Connection with retry
+mongoose.set('strictQuery', true);
+const connectToMongoDB = async () => {
+  let retries = 5;
+  while (retries > 0) {
+    try {
+      await mongoose.connect(process.env.MONGODB_URI, {
+        useNewUrlParser: true,
+        useUnifiedTopology: true,
+        serverSelectionTimeoutMS: 30000
+      });
+      console.log('Connected to MongoDB Atlas');
+      return true;
+    } catch (err) {
+      console.error(`MongoDB connection attempt failed (${retries} retries left):`, err.message);
+      retries -= 1;
+      if (retries === 0) {
+        console.error('MongoDB connection failed after all retries');
+        return false;
+      }
+      await new Promise(resolve => setTimeout(resolve, 5000));
+    }
+  }
+};
 
 // Schemas
 const userSchema = new mongoose.Schema({
@@ -110,7 +134,7 @@ const authenticateToken = async (req, res, next) => {
 };
 
 // API Routes
-app.get('/api/firebase-config', (req, res) => {
+app.get('/api/firebase-config', async (req, res) => {
   try {
     const firebaseConfig = {
       apiKey: process.env.FIREBASE_API_KEY,
@@ -133,6 +157,9 @@ app.get('/api/firebase-config', (req, res) => {
 
 app.get('/api/subscriptions', async (req, res) => {
   try {
+    if (!mongoose.connection.readyState) {
+      throw new Error('MongoDB not connected');
+    }
     console.log('Fetching subscriptions from MongoDB');
     const subscriptions = await Subscription.find();
     if (!subscriptions || subscriptions.length === 0) {
@@ -175,7 +202,7 @@ app.post('/api/register', async (req, res) => {
     res.json({ token: firebaseToken, userId });
   } catch (error) {
     console.error('Registration error:', error.message);
-    res.status(400).json({ error: error.code === 11000 ? 'Email already exists' : 'Registration failed' });
+    res.status(500).json({ error: `Registration failed: ${error.message}` });
   }
 });
 
@@ -218,6 +245,9 @@ app.post('/api/login', async (req, res) => {
 
 app.get('/api/user', authenticateToken, async (req, res) => {
   try {
+    if (!mongoose.connection.readyState) {
+      throw new Error('MongoDB not connected');
+    }
     console.log('Fetching user with ID:', req.user.id);
     const user = await User.findById(req.user.id).populate('subscription');
     if (!user) {
@@ -233,6 +263,9 @@ app.get('/api/user', authenticateToken, async (req, res) => {
 
 app.get('/api/referrals', authenticateToken, async (req, res) => {
   try {
+    if (!mongoose.connection.readyState) {
+      throw new Error('MongoDB not connected');
+    }
     console.log('Fetching referrals for user ID:', req.user.id);
     const user = await User.findById(req.user.id);
     if (!user) {
@@ -251,6 +284,9 @@ app.post('/api/referrals', authenticateToken, async (req, res) => {
   try {
     if (!email) {
       return res.status(400).json({ error: 'Missing email' });
+    }
+    if (!mongoose.connection.readyState) {
+      throw new Error('MongoDB not connected');
     }
     console.log('Adding referral for user ID:', req.user.id, 'with email:', email);
     const user = await User.findById(req.user.id);
@@ -333,6 +369,9 @@ app.get('/api/travel-options', authenticateToken, async (req, res) => {
 app.post('/api/create-checkout-session', authenticateToken, async (req, res) => {
   const { subscriptionId, userId } = req.body;
   try {
+    if (!mongoose.connection.readyState) {
+      throw new Error('MongoDB not connected');
+    }
     console.log('Creating checkout session for user ID:', userId, 'subscription ID:', subscriptionId);
     const subscription = await Subscription.findById(subscriptionId);
     if (!subscription) {
@@ -391,6 +430,9 @@ app.post('/api/create-topup-session', authenticateToken, async (req, res) => {
 app.post('/api/save-notification-token', authenticateToken, async (req, res) => {
   const { token, userId } = req.body;
   try {
+    if (!mongoose.connection.readyState) {
+      throw new Error('MongoDB not connected');
+    }
     console.log('Saving notification token for user ID:', userId);
     await User.findByIdAndUpdate(userId, { notificationToken: token });
     res.json({ message: 'Notification token saved' });
@@ -402,6 +444,7 @@ app.post('/api/save-notification-token', authenticateToken, async (req, res) => 
 
 // Catch-all route for client-side routing (must be last)
 app.get(/^(?!\/api\/).*/, (req, res) => {
+  console.log('Serving index.html for non-API route:', req.path);
   res.sendFile(path.join(__dirname, 'public', 'index.html'), err => {
     if (err) {
       console.error('Error serving index.html:', err);
@@ -409,31 +452,6 @@ app.get(/^(?!\/api\/).*/, (req, res) => {
     }
   });
 });
-
-// MongoDB Atlas Connection with retry
-mongoose.set('strictQuery', true);
-const connectToMongoDB = async () => {
-  let retries = 5;
-  while (retries > 0) {
-    try {
-      await mongoose.connect(process.env.MONGODB_URI, {
-        useNewUrlParser: true,
-        useUnifiedTopology: true,
-        serverSelectionTimeoutMS: 30000
-      });
-      console.log('Connected to MongoDB Atlas');
-      return true;
-    } catch (err) {
-      console.error(`MongoDB connection attempt failed (${retries} retries left):`, err.message);
-      retries -= 1;
-      if (retries === 0) {
-        console.error('MongoDB connection failed after all retries');
-        return false;
-      }
-      await new Promise(resolve => setTimeout(resolve, 5000));
-    }
-  }
-};
 
 // Seed subscriptions
 const seedSubscriptions = async () => {
