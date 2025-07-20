@@ -43,6 +43,10 @@ app.use(cors({
 }));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
+app.use((req, res, next) => {
+  res.setHeader('Content-Security-Policy', "script-src 'self' https://www.gstatic.com https://js.stripe.com; object-src 'none';");
+  next();
+});
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'), err => {
     if (err) {
@@ -52,7 +56,7 @@ app.get('/', (req, res) => {
   });
 });
 
-// New endpoint for Firebase client config
+// Updated endpoint for Firebase client config with VAPID key
 app.get('/api/firebase-config', (req, res) => {
   const firebaseConfig = {
     apiKey: process.env.FIREBASE_API_KEY,
@@ -60,7 +64,8 @@ app.get('/api/firebase-config', (req, res) => {
     projectId: "range30-b324b",
     storageBucket: "range30-b324b.appspot.com",
     messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID,
-    appId: process.env.FIREBASE_APP_ID
+    appId: process.env.FIREBASE_APP_ID,
+    vapidKey: process.env.FIREBASE_VAPID_KEY // Added public VAPID key
   };
   res.json(firebaseConfig);
 });
