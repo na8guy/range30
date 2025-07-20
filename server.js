@@ -52,6 +52,19 @@ app.get('/', (req, res) => {
   });
 });
 
+// New endpoint for Firebase client config
+app.get('/api/firebase-config', (req, res) => {
+  const firebaseConfig = {
+    apiKey: process.env.FIREBASE_API_KEY,
+    authDomain: "range30-b324b.firebaseapp.com",
+    projectId: "range30-b324b",
+    storageBucket: "range30-b324b.appspot.com",
+    messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID,
+    appId: process.env.FIREBASE_APP_ID
+  };
+  res.json(firebaseConfig);
+});
+
 // Catch-all route for client-side routing
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'), err => {

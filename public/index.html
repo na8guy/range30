@@ -76,16 +76,17 @@
   <div id="loading" style="display: none;">Loading...</div>
   <script>
     const BACKEND_URL = 'https://range30.onrender.com';
-    const firebaseConfig = {
-  apiKey: "AIzaSyC7GQ807LDYoViQ6kvm7mXyJfXHAfuQ7F8",
-  authDomain: "range30-b324b.firebaseapp.com",
-  projectId: "range30-b324b",
-  storageBucket: "range30-b324b.firebasestorage.app",
-  messagingSenderId: "117945302427",
-  appId: "1:117945302427:web:ac38a64a315ad597a6b53e",
-  measurementId: "G-951QQ94NL6"
-};
-    firebase.initializeApp(firebaseConfig);
+    // Fetch Firebase config from backend
+    fetch(`${BACKEND_URL}/api/firebase-config`)
+      .then(response => response.json())
+      .then(config => {
+        firebase.initializeApp(config);
+      })
+      .catch(error => {
+        console.error('Error fetching Firebase config:', error);
+        document.getElementById('loading').innerText = 'Error loading configuration';
+        document.getElementById('loading').style.display = 'block';
+      });
   </script>
   <script src="/app.js"></script>
 </body>
