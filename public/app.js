@@ -30,9 +30,28 @@ document.querySelectorAll('nav a').forEach(link => {
   });
 });
 
+// Handle hash changes for client-side routing
+window.addEventListener('hashchange', () => {
+  const sectionId = window.location.hash.slice(1) || 'login';
+  console.log('Hash changed, showing section:', sectionId);
+  showSection(sectionId);
+});
+
+// Initialize section based on current hash
+document.addEventListener('DOMContentLoaded', () => {
+  const sectionId = window.location.hash.slice(1) || 'login';
+  console.log('Page loaded, showing section:', sectionId);
+  showSection(sectionId);
+});
+
 function showSection(sectionId) {
+  console.log('Showing section:', sectionId);
   [subscriptionsSection, plannerSection, referralsSection, loginSection, registerSection].forEach(section => {
-    section.style.display = section.id === sectionId ? 'block' : 'none';
+    if (section) {
+      section.style.display = section.id === sectionId ? 'block' : 'none';
+    } else {
+      console.error('Section not found:', sectionId);
+    }
   });
 }
 
@@ -86,7 +105,7 @@ async function initializeAuth() {
         showSection('subscriptions');
       } else {
         authNav.innerHTML = `<a href="#login">Login</a>`;
-        showSection('login');
+        showSection(window.location.hash.slice(1) || 'login');
       }
     });
   } catch (error) {
@@ -318,8 +337,8 @@ loginForm.addEventListener('submit', async (e) => {
       console.error('Login fetch failed:', { status: response.status, statusText: response.statusText, responseText: text });
       throw new Error(`HTTP error! Status: ${response.status}, Message: ${text.slice(0, 100)}`);
     }
-    const { token } = await response.json();
-    console.log('Login: Received Firebase custom token');
+    const { token, userId } = await response.json();
+    console.log('Login: Received Firebase custom token, user ID:', userId);
     try {
       const userCredential = await signInWithCustomToken(window.firebaseAuth, token);
       console.log('Login: Signed in with custom token, user:', userCredential.user.uid);
@@ -357,8 +376,8 @@ registerForm.addEventListener('submit', async (e) => {
       console.error('Register fetch failed:', { status: response.status, statusText: response.statusText, responseText: text });
       throw new Error(`HTTP error! Status: ${response.status}, Message: ${text.slice(0, 100)}`);
     }
-    const { token } = await response.json();
-    console.log('Register: Received Firebase custom token');
+    const { token, userId } = await response.json();
+    console.log('Register: Received Firebase custom token, user ID:', userId);
     try {
       const userCredential = await signInWithCustomToken(window.firebaseAuth, token);
       console.log('Register: Signed in with custom token, user:', userCredential.user.uid);

@@ -45,75 +45,12 @@ app.use(cors({
 }));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
+
+// Content Security Policy
 app.use((req, res, next) => {
   res.setHeader('Content-Security-Policy', "script-src 'self' https://www.gstatic.com https://js.stripe.com; object-src 'none';");
   next();
 });
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'), err => {
-    if (err) {
-      console.error('Error serving index.html:', err);
-      res.status(500).json({ error: 'Error serving frontend' });
-    }
-  });
-});
-
-// Endpoint for Firebase client config with VAPID key
-app.get('/api/firebase-config', (req, res) => {
-  try {
-    const firebaseConfig = {
-      apiKey: process.env.FIREBASE_API_KEY,
-      authDomain: "range30trips.firebaseapp.com",
-      projectId: "range30trips",
-      storageBucket: "range30trips.firebasestorage.app",
-      messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID,
-      appId: process.env.FIREBASE_APP_ID,
-      vapidKey: process.env.FIREBASE_VAPID_KEY
-    };
-    if (!firebaseConfig.apiKey || !firebaseConfig.messagingSenderId || !firebaseConfig.appId) {
-      throw new Error('Missing Firebase environment variables');
-    }
-    res.json(firebaseConfig);
-  } catch (error) {
-    console.error('Error serving Firebase config:', error.message);
-    res.status(500).json({ error: 'Failed to load Firebase configuration' });
-  }
-});
-
-// Catch-all route for client-side routing
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'), err => {
-    if (err) {
-      console.error('Error serving index.html:', err);
-      res.status(500).json({ error: 'Error serving frontend' });
-    }
-  });
-});
-
-// MongoDB Atlas Connection with retry
-mongoose.set('strictQuery', true);
-const connectToMongoDB = async () => {
-  let retries = 5;
-  while (retries > 0) {
-    try {
-      await mongoose.connect(process.env.MONGODB_URI, {
-        useNewUrlParser: true,
-        useUnifiedTopology: true,
-        serverSelectionTimeoutMS: 30000
-      });
-      console.log('Connected to MongoDB Atlas');
-      return true;
-    } catch (err) {
-      console.error(`MongoDB connection attempt failed (${retries} retries left):`, err.message);
-      retries -= 1;
-      if (retries === 0) {
-        console.error('MongoDB connection failed after all retries');
-        return false;
-      }
-      await new Promise(resolve => setTimeout(resolve, 5000));
-    }
-  }
-};
 
 // Schemas
 const userSchema = new mongoose.Schema({
@@ -172,7 +109,28 @@ const authenticateToken = async (req, res, next) => {
   }
 };
 
-// Routes
+// API Routes
+app.get('/api/firebase-config', (req, res) => {
+  try {
+    const firebaseConfig = {
+      apiKey: process.env.FIREBASE_API_KEY,
+      authDomain: "range30trips.firebaseapp.com",
+      projectId: "range30trips",
+      storageBucket: "range30trips.firebasestorage.app",
+      messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID,
+      appId: process.env.FIREBASE_APP_ID,
+      vapidKey: process.env.FIREBASE_VAPID_KEY
+    };
+    if (!firebaseConfig.apiKey || !firebaseConfig.messagingSenderId || !firebaseConfig.appId) {
+      throw new Error('Missing Firebase environment variables');
+    }
+    res.json(firebaseConfig);
+  } catch (error) {
+    console.error('Error serving Firebase config:', error.message);
+    res.status(500).json({ error: 'Failed to load Firebase configuration' });
+  }
+});
+
 app.get('/api/subscriptions', async (req, res) => {
   try {
     console.log('Fetching subscriptions from MongoDB');
@@ -210,12 +168,11 @@ app.post('/api/register', async (req, res) => {
     await user.save();
     const userId = user._id.toString();
     console.log('Register: Created user with ID:', userId);
-    const token = jwt.sign({ id: userId }, process.env.JWT_SECRET, { expiresIn: '1h' });
     if (!firebaseInitialized) {
       throw new Error('Firebase Admin not initialized');
     }
     const firebaseToken = await admin.auth().createCustomToken(userId);
-    res.json({ token: firebaseToken });
+    res.json({ token: firebaseToken, userId });
   } catch (error) {
     console.error('Registration error:', error.message);
     res.status(400).json({ error: error.code === 11000 ? 'Email already exists' : 'Registration failed' });
@@ -227,9 +184,6 @@ app.post('/api/login', async (req, res) => {
   try {
     if (!email || !password) {
       return res.status(400).json({ error: 'Missing email or password' });
-    }
-    if (!process.env.JWT_SECRET) {
-      throw new Error('JWT_SECRET environment variable is missing');
     }
     if (!mongoose.connection.readyState) {
       throw new Error('MongoDB not connected');
@@ -250,13 +204,12 @@ app.post('/api/login', async (req, res) => {
       console.log('Login: Password mismatch for email:', email);
       return res.status(401).json({ error: 'Invalid credentials' });
     }
-    const token = jwt.sign({ id: userId }, process.env.JWT_SECRET, { expiresIn: '1h' });
     if (!firebaseInitialized) {
       throw new Error('Firebase Admin not initialized');
     }
     console.log('Login: Generating Firebase token for user ID:', userId);
     const firebaseToken = await admin.auth().createCustomToken(userId);
-    res.json({ token: firebaseToken });
+    res.json({ token: firebaseToken, userId });
   } catch (error) {
     console.error('Login error:', error.message);
     res.status(500).json({ error: `Login failed: ${error.message}` });
@@ -446,6 +399,41 @@ app.post('/api/save-notification-token', authenticateToken, async (req, res) => 
     res.status(500).json({ error: 'Server error: Failed to save notification token' });
   }
 });
+
+// Catch-all route for client-side routing (must be last)
+app.get(/^(?!\/api\/).*/, (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'), err => {
+    if (err) {
+      console.error('Error serving index.html:', err);
+      res.status(500).json({ error: 'Error serving frontend' });
+    }
+  });
+});
+
+// MongoDB Atlas Connection with retry
+mongoose.set('strictQuery', true);
+const connectToMongoDB = async () => {
+  let retries = 5;
+  while (retries > 0) {
+    try {
+      await mongoose.connect(process.env.MONGODB_URI, {
+        useNewUrlParser: true,
+        useUnifiedTopology: true,
+        serverSelectionTimeoutMS: 30000
+      });
+      console.log('Connected to MongoDB Atlas');
+      return true;
+    } catch (err) {
+      console.error(`MongoDB connection attempt failed (${retries} retries left):`, err.message);
+      retries -= 1;
+      if (retries === 0) {
+        console.error('MongoDB connection failed after all retries');
+        return false;
+      }
+      await new Promise(resolve => setTimeout(resolve, 5000));
+    }
+  }
+};
 
 // Seed subscriptions
 const seedSubscriptions = async () => {
