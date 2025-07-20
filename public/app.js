@@ -2,7 +2,7 @@ import { signInWithCustomToken, onAuthStateChanged, signOut } from 'https://www.
 import { getToken } from 'https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging.js';
 
 const BACKEND_URL = 'https://range30.onrender.com';
-const stripe = Stripe('pk_test_51YOURSTRIPEPUBLISHABLEKEY'); // Replace with your Stripe publishable key
+const stripe = Stripe('pk_live_Dg82e49VRbGtBVT8Y9gF4v6d'); // Replace with your Stripe publishable key
 
 // DOM elements
 const getStartedBtn = document.getElementById('get-started');
@@ -75,7 +75,7 @@ async function initializeAuth() {
   try {
     console.log('Setting up onAuthStateChanged...');
     onAuthStateChanged(auth, user => {
-      console.log('Auth state changed:', user ? 'User logged in' : 'No user');
+      console.log('Auth state changed:', user ? 'User logged in: ' + user.uid : 'No user');
       if (user) {
         authNav.innerHTML = `<a href="#logout">Logout</a>`;
         authNav.querySelector('a').addEventListener('click', () => {
@@ -289,16 +289,25 @@ loginForm.addEventListener('submit', async (e) => {
   try {
     const email = document.getElementById('login-email').value;
     const password = document.getElementById('login-password').value;
+    console.log('Login: Sending request to /api/login with email:', email);
     const response = await fetch(`${BACKEND_URL}/api/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password })
     });
     if (!response.ok) {
-      throw new Error(`HTTP error! Status: ${response.status}`);
+      const errorData = await response.json();
+      throw new Error(`HTTP error! Status: ${response.status}, Message: ${errorData.error || 'Unknown error'}`);
     }
     const { token } = await response.json();
-    await signInWithCustomToken(window.firebaseAuth, token);
+    console.log('Login: Received Firebase custom token');
+    try {
+      const userCredential = await signInWithCustomToken(window.firebaseAuth, token);
+      console.log('Login: Signed in with custom token, user:', userCredential.user.uid);
+    } catch (authError) {
+      console.error('Login: Firebase auth error:', authError.code, authError.message);
+      throw new Error(`Firebase auth error: ${authError.message}`);
+    }
   } catch (error) {
     console.error('Login error:', error);
     alert('Login failed: ' + error.message);
@@ -318,16 +327,25 @@ registerForm.addEventListener('submit', async (e) => {
     const name = document.getElementById('register-name').value;
     const email = document.getElementById('register-email').value;
     const password = document.getElementById('register-password').value;
+    console.log('Register: Sending request to /api/register with email:', email);
     const response = await fetch(`${BACKEND_URL}/api/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, email, password })
     });
     if (!response.ok) {
-      throw new Error(`HTTP error! Status: ${response.status}`);
+      const errorData = await response.json();
+      throw new Error(`HTTP error! Status: ${response.status}, Message: ${errorData.error || 'Unknown error'}`);
     }
     const { token } = await response.json();
-    await signInWithCustomToken(window.firebaseAuth, token);
+    console.log('Register: Received Firebase custom token');
+    try {
+      const userCredential = await signInWithCustomToken(window.firebaseAuth, token);
+      console.log('Register: Signed in with custom token, user:', userCredential.user.uid);
+    } catch (authError) {
+      console.error('Register: Firebase auth error:', authError.code, authError.message);
+      throw new Error(`Firebase auth error: ${authError.message}`);
+    }
   } catch (error) {
     console.error('Register error:', error);
     alert('Registration failed: ' + error.message);
