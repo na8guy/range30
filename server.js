@@ -1,388 +1,181 @@
 const express = require('express');
 const mongoose = require('mongoose');
-const cors = require('cors');
 const bcrypt = require('bcryptjs');
-const Stripe = require('stripe');
+const admin = require('firebase-admin');
 const Amadeus = require('amadeus');
 const OpenAI = require('openai');
-const admin = require('firebase-admin');
-require('dotenv').config();
+const Stripe = require('stripe');
 const path = require('path');
+const cors = require('cors');
+require('dotenv').config();
 
 const app = express();
+const port = process.env.PORT || 5001;
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
-const amadeus = new Amadeus({
-  clientId: process.env.AMADEUS_API_KEY,
-  clientSecret: process.env.AMADEUS_API_SECRET
-});
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
-// Initialize Firebase Admin
-let firebaseInitialized = false;
-try {
-  if (!process.env.FIREBASE_CREDENTIALS) {
-    throw new Error('FIREBASE_CREDENTIALS environment variable is missing');
-  }
-  const credentials = JSON.parse(process.env.FIREBASE_CREDENTIALS);
-  if (!credentials.project_id || !credentials.client_email || !credentials.private_key) {
-    throw new Error('Invalid FIREBASE_CREDENTIALS: missing required fields');
-  }
-  admin.initializeApp({
-    credential: admin.credential.cert(credentials)
-  });
-  firebaseInitialized = true;
-  console.log('Firebase Admin initialized successfully');
-} catch (error) {
-  console.error('Firebase Admin initialization error:', error.message);
-}
 
 // Middleware
-app.use(cors({ 
-  origin: ['http://localhost:3000', 'http://localhost:5001', 'https://range30.onrender.com'],
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
+app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Content Security Policy
-app.use((req, res, next) => {
-  res.setHeader('Content-Security-Policy', "script-src 'self' https://www.gstatic.com https://js.stripe.com 'unsafe-eval'; object-src 'none';");
-  next();
+// MongoDB Connection
+mongoose.connect(process.env.MONGODB_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true
+}).then(() => {
+  console.log('Connected to MongoDB Atlas');
+}).catch(error => {
+  console.error('MongoDB connection error:', error);
+  process.exit(1);
 });
 
-// MongoDB Atlas Connection with retry
-mongoose.set('strictQuery', true);
-const connectToMongoDB = async () => {
-  let retries = 5;
-  while (retries > 0) {
-    try {
-      await mongoose.connect(process.env.MONGODB_URI, {
-        useNewUrlParser: true,
-        useUnifiedTopology: true,
-        serverSelectionTimeoutMS: 30000
-      });
-      console.log('Connected to MongoDB Atlas');
-      return true;
-    } catch (err) {
-      console.error(`MongoDB connection attempt failed (${retries} retries left):`, err.message);
-      retries -= 1;
-      if (retries === 0) {
-        console.error('MongoDB connection failed after all retries');
-        return false;
-      }
-      await new Promise(resolve => setTimeout(resolve, 5000));
-    }
-  }
-};
+// Firebase Admin Initialization
+try {
+  admin.initializeApp({
+    credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_CREDENTIALS))
+  });
+  console.log('Firebase Admin initialized successfully');
+} catch (error) {
+  console.error('Firebase Admin initialization error:', error);
+  process.exit(1);
+}
 
-// Schemas
+// MongoDB Schemas
 const userSchema = new mongoose.Schema({
   name: String,
   email: { type: String, unique: true },
   password: String,
-  subscription: { type: mongoose.Schema.Types.ObjectId, ref: 'Subscription' },
-  referralCode: String,
-  referrals: [{ email: String, reward: Number, date: { type: Date, default: Date.now } }],
   notificationToken: String
 });
-
 const subscriptionSchema = new mongoose.Schema({
   name: String,
   price: Number,
-  budget: Number,
   features: [String]
 });
-
+const referralSchema = new mongoose.Schema({
+  userId: String,
+  email: String,
+  reward: Number
+});
 const tripSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  userId: String,
   destination: String,
-  dates: String,
+  cost: Number,
   activities: [String],
   hotels: [String],
   flights: [String],
   carbonFootprint: Number,
-  cost: Number,
   topUpRequired: Boolean,
   topUpAmount: Number
 });
 
 const User = mongoose.model('User', userSchema);
 const Subscription = mongoose.model('Subscription', subscriptionSchema);
+const Referral = mongoose.model('Referral', referralSchema);
 const Trip = mongoose.model('Trip', tripSchema);
 
-// Middleware to verify Firebase ID token
-const authenticateToken = async (req, res, next) => {
-  const token = req.headers['authorization']?.split(' ')[1];
-  if (!token) {
-    console.error('Authenticate: No token provided');
+// Authentication Middleware
+const authMiddleware = async (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Unauthorized: No token provided' });
   }
+  const idToken = authHeader.split('Bearer ')[1];
   try {
-    if (!firebaseInitialized) {
-      throw new Error('Firebase Admin not initialized');
-    }
-    console.log('Authenticate: Verifying Firebase ID token');
-    const decodedToken = await admin.auth().verifyIdToken(token);
-    req.user = { id: decodedToken.uid };
-    console.log('Authenticate: Token verified, user ID:', decodedToken.uid);
+    const decodedToken = await admin.auth().verifyIdToken(idToken);
+    req.user = decodedToken;
     next();
   } catch (error) {
-    console.error('Authenticate: Token verification error:', error.message);
-    res.status(403).json({ error: `Forbidden: ${error.message}` });
+    console.error('Token verification error:', error);
+    res.status(401).json({ error: 'Unauthorized: Invalid token' });
   }
 };
 
 // API Routes
-app.get('/api/firebase-config', async (req, res) => {
+
+// Firebase Config
+app.get('/api/firebase-config', (req, res) => {
+  console.log('Serving Firebase config');
+  const config = {
+    apiKey: process.env.FIREBASE_API_KEY,
+    authDomain: 'range30trips.firebaseapp.com',
+    projectId: 'range30trips',
+    storageBucket: 'range30trips.firebasestorage.app',
+    messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID,
+    appId: process.env.FIREBASE_APP_ID,
+    vapidKey: process.env.FIREBASE_VAPID_KEY
+  };
+  if (!config.apiKey || !config.projectId || !config.appId || !config.vapidKey) {
+    console.error('Invalid Firebase config:', config);
+    return res.status(500).json({ error: 'Server error: Invalid Firebase configuration' });
+  }
+  res.json(config);
+});
+
+// Register
+app.post('/api/register', async (req, res) => {
   try {
-    const firebaseConfig = {
-      apiKey: process.env.FIREBASE_API_KEY,
-      authDomain: "range30trips.firebaseapp.com",
-      projectId: "range30trips",
-      storageBucket: "range30trips.firebasestorage.app",
-      messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID,
-      appId: process.env.FIREBASE_APP_ID,
-      vapidKey: process.env.FIREBASE_VAPID_KEY
-    };
-    if (!firebaseConfig.apiKey || !firebaseConfig.messagingSenderId || !firebaseConfig.appId || !firebaseConfig.vapidKey) {
-      console.error('Missing Firebase environment variables:', {
-        apiKey: !!firebaseConfig.apiKey,
-        messagingSenderId: !!firebaseConfig.messagingSenderId,
-        appId: !!firebaseConfig.appId,
-        vapidKey: !!firebaseConfig.vapidKey
-      });
-      throw new Error('Missing Firebase environment variables');
+    const { name, email, password } = req.body;
+    if (!name || !email || !password) {
+      return res.status(400).json({ error: 'Missing required fields' });
     }
-    console.log('Serving Firebase config');
-    res.json(firebaseConfig);
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const userRecord = await admin.auth().createUser({ email, password });
+    const user = new User({ name, email, password: hashedPassword });
+    await user.save();
+    console.log('Register: Created user with ID:', userRecord.uid);
+    const token = await admin.auth().createCustomToken(userRecord.uid);
+    res.json({ token, userId: userRecord.uid });
   } catch (error) {
-    console.error('Error serving Firebase config:', error.message);
-    res.status(500).json({ error: 'Failed to load Firebase configuration' });
+    console.error('Register error:', error);
+    if (error.code === 'auth/email-already-exists') {
+      res.status(400).json({ error: 'Email already exists' });
+    } else {
+      res.status(500).json({ error: 'Server error: Failed to register user' });
+    }
   }
 });
 
+// Login
+app.post('/api/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Missing email or password' });
+    }
+    const user = await User.findOne({ email });
+    if (!user || !(await bcrypt.compare(password, user.password))) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+    console.log('Login: Generating Firebase token for user ID:', user._id);
+    const token = await admin.auth().createCustomToken(user._id.toString());
+    res.json({ token, userId: user._id });
+  } catch (error) {
+    console.error('Login error:', error);
+    res.status(500).json({ error: 'Server error: Failed to login' });
+  }
+});
+
+// Subscriptions
 app.get('/api/subscriptions', async (req, res) => {
   try {
-    if (!mongoose.connection.readyState) {
-      throw new Error('MongoDB not connected');
-    }
-    console.log('Fetching subscriptions from MongoDB');
     const subscriptions = await Subscription.find();
-    if (!subscriptions || subscriptions.length === 0) {
-      console.log('No subscriptions found in database');
-      return res.status(404).json({ error: 'No subscriptions found' });
-    }
-    console.log('Subscriptions fetched:', subscriptions.length);
     res.json(subscriptions);
   } catch (error) {
-    console.error('Error fetching subscriptions:', error.message);
+    console.error('Subscriptions error:', error);
     res.status(500).json({ error: 'Server error: Failed to fetch subscriptions' });
   }
 });
 
-app.post('/api/register', async (req, res) => {
-  const { name, email, password } = req.body;
+// Create Checkout Session (Stripe)
+app.post('/api/create-checkout-session', authMiddleware, async (req, res) => {
   try {
-    if (!name || !email || !password) {
-      return res.status(400).json({ error: 'Missing required fields' });
+    const { subscriptionId, userId } = req.body;
+    if (!subscriptionId || !userId) {
+      return res.status(400).json({ error: 'Missing subscriptionId or userId' });
     }
-    if (!mongoose.connection.readyState) {
-      throw new Error('MongoDB not connected');
-    }
-    console.log('Register: Checking for existing user with email:', email);
-    const existingUser = await User.findOne({ email });
-    if (existingUser) {
-      console.log('Register: Email already exists:', email);
-      return res.status(400).json({ error: 'Email already exists' });
-    }
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const referralCode = Math.random().toString(36).substring(2, 8).toUpperCase();
-    const user = new User({ name, email, password: hashedPassword, referralCode });
-    await user.save();
-    const userId = user._id.toString();
-    console.log('Register: Created user with ID:', userId);
-    if (!firebaseInitialized) {
-      throw new Error('Firebase Admin not initialized');
-    }
-    const firebaseToken = await admin.auth().createCustomToken(userId);
-    res.json({ token: firebaseToken, userId });
-  } catch (error) {
-    console.error('Registration error:', error.message);
-    res.status(500).json({ error: `Registration failed: ${error.message}` });
-  }
-});
-
-app.post('/api/login', async (req, res) => {
-  const { email, password } = req.body;
-  try {
-    if (!email || !password) {
-      return res.status(400).json({ error: 'Missing email or password' });
-    }
-    if (!mongoose.connection.readyState) {
-      throw new Error('MongoDB not connected');
-    }
-    console.log('Login: Querying user with email:', email);
-    const user = await User.findOne({ email });
-    if (!user) {
-      console.log('Login: No user found for email:', email);
-      return res.status(401).json({ error: 'Invalid credentials' });
-    }
-    console.log('Login: User found:', { email: user.email, id: user._id });
-    const userId = user._id.toString();
-    if (!userId || typeof userId !== 'string') {
-      throw new Error('Invalid user ID: ' + JSON.stringify(user._id));
-    }
-    const passwordMatch = await bcrypt.compare(password, user.password);
-    if (!passwordMatch) {
-      console.log('Login: Password mismatch for email:', email);
-      return res.status(401).json({ error: 'Invalid credentials' });
-    }
-    if (!firebaseInitialized) {
-      throw new Error('Firebase Admin not initialized');
-    }
-    console.log('Login: Generating Firebase token for user ID:', userId);
-    const firebaseToken = await admin.auth().createCustomToken(userId);
-    res.json({ token: firebaseToken, userId });
-  } catch (error) {
-    console.error('Login error:', error.message);
-    res.status(500).json({ error: `Login failed: ${error.message}` });
-  }
-});
-
-app.get('/api/user', authenticateToken, async (req, res) => {
-  try {
-    if (!mongoose.connection.readyState) {
-      throw new Error('MongoDB not connected');
-    }
-    console.log('Fetching user with ID:', req.user.id);
-    const user = await User.findById(req.user.id).populate('subscription');
-    if (!user) {
-      console.log('User not found for ID:', req.user.id);
-      return res.status(404).json({ error: 'User not found' });
-    }
-    res.json(user);
-  } catch (error) {
-    console.error('User fetch error:', error.message);
-    res.status(500).json({ error: 'Server error: Failed to fetch user' });
-  }
-});
-
-app.get('/api/referrals', authenticateToken, async (req, res) => {
-  try {
-    if (!mongoose.connection.readyState) {
-      throw new Error('MongoDB not connected');
-    }
-    console.log('Fetching referrals for user ID:', req.user.id);
-    const user = await User.findById(req.user.id);
-    if (!user) {
-      console.log('User not found for ID:', req.user.id);
-      return res.status(404).json({ error: 'User not found' });
-    }
-    res.json(user.referrals);
-  } catch (error) {
-    console.error('Referrals fetch error:', error.message);
-    res.status(500).json({ error: 'Server error: Failed to fetch referrals' });
-  }
-});
-
-app.post('/api/referrals', authenticateToken, async (req, res) => {
-  const { email } = req.body;
-  try {
-    if (!email) {
-      return res.status(400).json({ error: 'Missing email' });
-    }
-    if (!mongoose.connection.readyState) {
-      throw new Error('MongoDB not connected');
-    }
-    console.log('Adding referral for user ID:', req.user.id, 'with email:', email);
-    const user = await User.findById(req.user.id);
-    if (!user) {
-      console.log('User not found for ID:', req.user.id);
-      return res.status(404).json({ error: 'User not found' });
-    }
-    user.referrals.push({ email, reward: 50 });
-    if (firebaseInitialized && user.notificationToken) {
-      await admin.messaging().send({
-        token: user.notificationToken,
-        notification: { title: 'New Referral', body: `You earned £50 for referring ${email}!` }
-      });
-    }
-    await user.save();
-    res.json(user.referrals);
-  } catch (error) {
-    console.error('Referral error:', error.message);
-    res.status(500).json({ error: 'Server error: Failed to add referral' });
-  }
-});
-
-app.post('/api/ai-trip-planner', authenticateToken, async (req, res) => {
-  const { destination, dates, preferences, budget, allowTopUp, language } = req.body;
-  try {
-    console.log('Planning trip for user ID:', req.user.id);
-    const flights = await amadeus.shopping.flightOffersSearch.get({
-      originLocationCode: 'LON',
-      destinationLocationCode: destination.split(',')[0].toUpperCase(),
-      departureDate: dates.split(' to ')[0],
-      adults: 1
-    });
-    const flightPrice = flights.data[0]?.price?.total || 1000;
-    const prompt = `Plan a trip to ${destination} from ${dates} with preferences: ${preferences}. Budget: £${budget}. Language: ${language}.`;
-    const openaiResponse = await openai.chat.completions.create({
-      model: 'gpt-4',
-      messages: [{ role: 'user', content: prompt }]
-    });
-    const itinerary = {
-      destination,
-      activities: openaiResponse.choices[0].message.content.split('\n').slice(0, 3),
-      hotels: ['Sample Hotel'],
-      flights: [`Flight from LON to ${destination}`],
-      carbonFootprint: Math.floor(Math.random() * 1000),
-      cost: parseFloat(flightPrice),
-      topUpRequired: flightPrice > budget && allowTopUp,
-      topUpAmount: flightPrice > budget ? flightPrice - budget : 0
-    };
-    await Trip.create({ ...itinerary, userId: req.user.id });
-    res.json(itinerary);
-  } catch (error) {
-    console.error('AI trip planner error:', error.message);
-    res.status(500).json({ error: 'Server error: Failed to plan trip' });
-  }
-});
-
-app.get('/api/travel-options', authenticateToken, async (req, res) => {
-  const { destination } = req.query;
-  try {
-    console.log('Fetching travel options for user ID:', req.user.id);
-    const flights = await amadeus.shopping.flightOffersSearch.get({
-      originLocationCode: 'LON',
-      destinationLocationCode: destination.split(',')[0].toUpperCase(),
-      departureDate: '2025-08-01',
-      adults: 1
-    });
-    res.json({
-      destination,
-      activities: ['Custom Activity 1', 'Custom Activity 2'],
-      hotels: ['Custom Hotel'],
-      flights: [flights.data[0]?.itineraries[0]?.segments[0]?.departure?.iataCode + ' to ' + flights.data[0]?.itineraries[0]?.segments[0]?.arrival?.iataCode],
-      carbonFootprint: Math.floor(Math.random() * 1000)
-    });
-  } catch (error) {
-    console.error('Travel options error:', error.message);
-    res.status(500).json({ error: 'Server error: Failed to fetch travel options' });
-  }
-});
-
-app.post('/api/create-checkout-session', authenticateToken, async (req, res) => {
-  const { subscriptionId, userId } = req.body;
-  try {
-    if (!mongoose.connection.readyState) {
-      throw new Error('MongoDB not connected');
-    }
-    console.log('Creating checkout session for user ID:', userId, 'subscription ID:', subscriptionId);
     const subscription = await Subscription.findById(subscriptionId);
     if (!subscription) {
-      console.log('Subscription not found:', subscriptionId);
       return res.status(404).json({ error: 'Subscription not found' });
     }
     const session = await stripe.checkout.sessions.create({
@@ -391,65 +184,212 @@ app.post('/api/create-checkout-session', authenticateToken, async (req, res) => 
         price_data: {
           currency: 'gbp',
           product_data: { name: subscription.name },
-          unit_amount: Math.round(subscription.price * 100)
+          unit_amount: subscription.price * 100
         },
         quantity: 1
       }],
       mode: 'subscription',
-      success_url: `${process.env.RENDER_FRONTEND_URL}/#dashboard`,
+      success_url: `${process.env.RENDER_FRONTEND_URL}/#subscriptions`,
       cancel_url: `${process.env.RENDER_FRONTEND_URL}/#subscriptions`,
-      client_reference_id: userId
+      metadata: { userId, subscriptionId }
     });
-    await User.findByIdAndUpdate(userId, { subscription: subscriptionId });
     res.json({ sessionId: session.id });
   } catch (error) {
-    console.error('Checkout error:', error.message);
+    console.error('Checkout session error:', error);
     res.status(500).json({ error: 'Server error: Failed to create checkout session' });
   }
 });
 
-app.post('/api/create-topup-session', authenticateToken, async (req, res) => {
-  const { amount, userId } = req.body;
+// Create Top-Up Session (Stripe)
+app.post('/api/create-topup-session', authMiddleware, async (req, res) => {
   try {
-    console.log('Creating top-up session for user ID:', userId, 'amount:', amount);
+    const { amount, userId } = req.body;
+    if (!amount || !userId) {
+      return res.status(400).json({ error: 'Missing amount or userId' });
+    }
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
       line_items: [{
         price_data: {
           currency: 'gbp',
-          product_data: { name: 'Trip Top-Up' },
-          unit_amount: Math.round(amount * 100)
+          product_data: { name: 'Top-Up' },
+          unit_amount: amount * 100
         },
         quantity: 1
       }],
       mode: 'payment',
-      success_url: `${process.env.RENDER_FRONTEND_URL}/#dashboard`,
+      success_url: `${process.env.RENDER_FRONTEND_URL}/#planner`,
       cancel_url: `${process.env.RENDER_FRONTEND_URL}/#planner`,
-      client_reference_id: userId
+      metadata: { userId, type: 'topup' }
     });
     res.json({ sessionId: session.id });
   } catch (error) {
-    console.error('Top-up error:', error.message);
+    console.error('Top-up session error:', error);
     res.status(500).json({ error: 'Server error: Failed to create top-up session' });
   }
 });
 
-app.post('/api/save-notification-token', authenticateToken, async (req, res) => {
-  const { token, userId } = req.body;
+// Referrals
+app.post('/api/referrals', authMiddleware, async (req, res) => {
   try {
-    if (!mongoose.connection.readyState) {
-      throw new Error('MongoDB not connected');
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ error: 'Missing email' });
     }
-    console.log('Saving notification token for user ID:', userId);
-    await User.findByIdAndUpdate(userId, { notificationToken: token });
+    const referral = new Referral({
+      userId: req.user.uid,
+      email,
+      reward: 10 // Example reward
+    });
+    await referral.save();
+    res.json({ message: 'Referral submitted' });
+  } catch (error) {
+    console.error('Referral error:', error);
+    res.status(500).json({ error: 'Server error: Failed to submit referral' });
+  }
+});
+
+app.get('/api/referrals', authMiddleware, async (req, res) => {
+  try {
+    const referrals = await Referral.find({ userId: req.user.uid });
+    res.json(referrals);
+  } catch (error) {
+    console.error('Referrals fetch error:', error);
+    res.status(500).json({ error: 'Server error: Failed to fetch referrals' });
+  }
+});
+
+// Save Notification Token
+app.post('/api/save-notification-token', authMiddleware, async (req, res) => {
+  try {
+    const { token, userId } = req.body;
+    if (!token || !userId) {
+      return res.status(400).json({ error: 'Missing token or userId' });
+    }
+    await User.updateOne({ _id: userId }, { notificationToken: token });
     res.json({ message: 'Notification token saved' });
   } catch (error) {
-    console.error('Notification token error:', error.message);
+    console.error('Notification token error:', error);
     res.status(500).json({ error: 'Server error: Failed to save notification token' });
   }
 });
 
-// Catch-all route for client-side routing (must be last)
+// Trip Planner
+app.post('/api/ai-trip-planner', authMiddleware, async (req, res) => {
+  try {
+    const { destination, dates, preferences, budget, allowTopUp, language } = req.body;
+    const userId = req.user.uid;
+
+    // Validate input
+    if (!destination || !dates || !preferences || !budget) {
+      console.error('Missing required fields:', { destination, dates, preferences, budget });
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    const [startDate, endDate] = dates.split(' to ');
+    if (!startDate || !endDate || !/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) {
+      console.error('Invalid date format:', dates);
+      return res.status(400).json({ error: 'Invalid date format. Use YYYY-MM-DD to YYYY-MM-DD' });
+    }
+
+    // Validate environment variables
+    if (!process.env.AMADEUS_API_KEY || !process.env.AMADEUS_API_SECRET) {
+      console.error('Missing Amadeus API credentials');
+      return res.status(500).json({ error: 'Server error: Amadeus API credentials not configured' });
+    }
+    if (!process.env.OPENAI_API_KEY) {
+      console.error('Missing OpenAI API key');
+      return res.status(500).json({ error: 'Server error: OpenAI API key not configured' });
+    }
+
+    // Fetch flight and hotel data from Amadeus
+    const amadeus = new Amadeus({
+      clientId: process.env.AMADEUS_API_KEY,
+      clientSecret: process.env.AMADEUS_API_SECRET
+    });
+
+    let flightOffers, hotelOffers;
+    try {
+      flightOffers = await amadeus.shopping.flightOffersSearch.get({
+        originLocationCode: 'LON', // Replace with dynamic origin if needed
+        destinationLocationCode: destination.toUpperCase(),
+        departureDate: startDate,
+        returnDate: endDate,
+        adults: 1,
+        maxPrice: budget
+      });
+    } catch (amadeusError) {
+      console.error('Amadeus flight search error:', amadeusError.response?.data || amadeusError.message);
+      return res.status(500).json({ error: 'Failed to fetch flight data from Amadeus' });
+    }
+
+    try {
+      hotelOffers = await amadeus.shopping.hotelOffers.get({
+        cityCode: destination.toUpperCase(),
+        checkInDate: startDate,
+        checkOutDate: endDate
+      });
+    } catch (amadeusError) {
+      console.error('Amadeus hotel search error:', amadeusError.response?.data || amadeusError.message);
+      return res.status(500).json({ error: 'Failed to fetch hotel data from Amadeus' });
+    }
+
+    // Generate trip plan with OpenAI
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const prompt = `Plan a trip to ${destination} from ${startDate} to ${endDate} with a budget of £${budget}. Preferences: ${preferences}. Include activities, hotels, and flights. Return a list of activities starting with "-".`;
+    let completion;
+    try {
+      completion = await openai.chat.completions.create({
+        model: 'gpt-3.5-turbo',
+        messages: [{ role: 'user', content: prompt }],
+        max_tokens: 500
+      });
+    } catch (openaiError) {
+      console.error('OpenAI error:', openaiError.response?.data || openaiError.message);
+      return res.status(500).json({ error: 'Failed to generate trip plan with OpenAI' });
+    }
+
+    const cost = calculateTotalCost(flightOffers, hotelOffers);
+    const tripPlan = {
+      destination,
+      cost,
+      activities: completion.choices[0].message.content.split('\n').filter(line => line.startsWith('-')),
+      hotels: hotelOffers.data.map(h => h.name || 'Unknown Hotel'),
+      flights: flightOffers.data.map(f => f.itineraries[0].segments[0].departure.iataCode || 'Unknown Flight'),
+      carbonFootprint: calculateCarbonFootprint(flightOffers),
+      topUpRequired: allowTopUp && cost > budget,
+      topUpAmount: cost > budget ? cost - budget : 0
+    };
+
+    // Save to MongoDB
+    try {
+      await Trip.create({ userId, ...tripPlan });
+      console.log('Trip plan saved for user:', userId);
+    } catch (mongoError) {
+      console.error('MongoDB error:', mongoError.message);
+      return res.status(500).json({ error: 'Failed to save trip plan to database' });
+    }
+
+    console.log('Trip plan generated for user:', userId);
+    res.json(tripPlan);
+  } catch (error) {
+    console.error('Trip planner error:', error.message, error.stack);
+    res.status(500).json({ error: `Server error: ${error.message}` });
+  }
+});
+
+// Placeholder functions
+function calculateTotalCost(flightOffers, hotelOffers) {
+  const flightCost = flightOffers.data[0]?.price?.total || 0;
+  const hotelCost = hotelOffers.data[0]?.offers[0]?.price?.total || 0;
+  return parseFloat(flightCost) + parseFloat(hotelCost);
+}
+
+function calculateCarbonFootprint(flightOffers) {
+  return flightOffers.data[0]?.itineraries[0]?.segments.length * 100 || 100; // Example
+}
+
+// Catch-all route for frontend
 app.get(/^(?!\/api\/).*/, (req, res) => {
   console.log('Serving index.html for non-API route:', req.path);
   res.sendFile(path.join(__dirname, 'public', 'index.html'), err => {
@@ -460,43 +400,7 @@ app.get(/^(?!\/api\/).*/, (req, res) => {
   });
 });
 
-// Seed subscriptions
-const seedSubscriptions = async () => {
-  try {
-    const connected = await connectToMongoDB();
-    if (!connected) {
-      console.error('Skipping seeding due to MongoDB connection failure');
-      return;
-    }
-    const subscriptions = [
-      { name: 'Solo Traveler', price: 60, budget: 1000, features: ['1 Trip/Year', '15% Discount', 'Travel Insurance', 'Solo Tours'] },
-      { name: 'Couple', price: 100, budget: 2000, features: ['1 Trip/Year', '20% Discount', 'Romantic Activities', 'Travel Insurance'] },
-      { name: 'Family', price: 200, budget: 4000, features: ['1 Trip/Year', '25% Discount', 'Family Activities', 'Travel Insurance'] },
-      { name: 'Group', price: 29.99, budget: 3000, features: ['1 Trip/Year', '20% Discount', 'Group Activities', 'Travel Insurance'] }
-    ];
-    await Subscription.deleteMany({});
-    await Subscription.insertMany(subscriptions);
-    const hashedPassword = await bcrypt.hash('password123', 10);
-    await User.deleteMany({});
-    const testUser = await User.create({
-      name: 'Test User',
-      email: 'test@example.com',
-      password: hashedPassword,
-      referralCode: 'TEST123'
-    });
-    console.log('Database seeded successfully, test user ID:', testUser._id.toString());
-  } catch (error) {
-    console.error('Seeding error:', error.message);
-  }
-};
-
-// Start server only after MongoDB connection attempt
-connectToMongoDB().then(connected => {
-  if (connected) {
-    seedSubscriptions();
-  } else {
-    console.warn('Starting server without seeding due to MongoDB connection failure');
-  }
-  const PORT = process.env.PORT || 5001;
-  app.listen(PORT, '0.0.0.0', () => console.log(`Server running on port ${PORT}`));
+// Start server
+app.listen(port, () => {
+  console.log(`Server running on port ${port}`);
 });

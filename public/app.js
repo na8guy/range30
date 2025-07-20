@@ -220,7 +220,12 @@ tripPlannerForm.addEventListener('submit', async (e) => {
     });
     if (!response.ok) {
       const text = await response.text();
-      console.error('Trip planner fetch failed:', { status: response.status, statusText: response.statusText, responseText: text });
+      console.error('Trip planner fetch failed:', {
+        status: response.status,
+        statusText: response.statusText,
+        responseText: text,
+        url: response.url
+      }); // Updated logging
       throw new Error(`HTTP error! Status: ${response.status}, Response: ${text.slice(0, 100)}`);
     }
     const trip = await response.json();
@@ -234,7 +239,7 @@ tripPlannerForm.addEventListener('submit', async (e) => {
       ${trip.topUpRequired ? `<p>Top-Up Required: £${trip.topUpAmount}</p><button onclick="topUp(${trip.topUpAmount}, '${user.uid}')">Top Up</button>` : ''}
     `;
   } catch (error) {
-    console.error('Trip planner error:', error);
+    console.error('Trip planner error:', error.message, error.stack); // Updated logging
     tripResult.innerHTML = `<p>Error planning trip: ${error.message}</p>`;
   }
   loading.style.display = 'none';
