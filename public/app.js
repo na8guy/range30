@@ -82,13 +82,19 @@ async function waitForFirebase() {
   while (!window.firebaseInitialized || !window.firebaseAuth || typeof window.firebaseAuth !== 'object') {
     if (attempts >= maxAttempts) {
       console.error('Firebase initialization timed out after', maxAttempts, 'attempts');
-      loading.innerText = 'Authentication service unavailable. Please try again later.';
+      loading.innerText = 'Authentication service unavailable. Please check your network or try again later.';
       loading.style.display = 'block';
       return false;
     }
     console.log('Waiting for Firebase auth, attempt', attempts + 1);
     await new Promise(resolve => setTimeout(resolve, 500));
     attempts++;
+  }
+  if (!window.firebaseInitialized) {
+    console.error('Firebase initialized but window.firebaseInitialized is false');
+    loading.innerText = 'Authentication service failed to initialize.';
+    loading.style.display = 'block';
+    return false;
   }
   console.log('Firebase auth ready');
   return true;
@@ -98,8 +104,8 @@ async function waitForFirebase() {
 async function initializeAuth() {
   console.log('Starting auth initialization...');
   if (!(await waitForFirebase())) {
-    console.error('Failed to initialize auth due to timeout');
-    alert('Authentication service unavailable.');
+    console.error('Failed to initialize auth due to timeout or error');
+    alert('Authentication service unavailable. Please try again later or contact support.');
     return;
   }
   const auth = window.firebaseAuth;
@@ -475,11 +481,14 @@ if (window.firebaseMessaging && (await waitForFirebase())) {
   try {
     await window.firebaseMessaging.requestPermission();
     const token = await getToken(window.firebaseMessaging, { vapidKey: window.vapidKey });
-    await fetch(`${BACKEND_URL}/api/save-notification-token`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${await window.firebaseAuth?.currentUser?.getIdToken()}` },
-      body: JSON.stringify({ token, userId: window.firebaseAuth?.currentUser?.uid })
-    });
+    if (window.firebaseAuth?.currentUser) {
+      const idToken = await window.firebaseAuth.currentUser.getIdToken();
+      await fetch(`${BACKEND_URL}/api/save-notification-token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
+        body: JSON.stringify({ token, userId: window.firebaseAuth.currentUser.uid })
+      });
+    }
   } catch (error) {
     console.error('Notification permission error:', error);
   }
