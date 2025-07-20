@@ -47,14 +47,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
 function showSection(sectionId) {
   console.log('Showing section:', sectionId);
-  const sections = { subscriptions: subscriptionsSection, planner: plannerSection, referrals: referralsSection, login: loginSection, register: registerSection };
+  const sections = {
+    subscriptions: subscriptionsSection,
+    planner: plannerSection,
+    referrals: referralsSection,
+    login: loginSection,
+    register: registerSection
+  };
   if (!sections[sectionId]) {
     console.error('Invalid section ID:', sectionId);
     return showSection('login');
   }
   Object.values(sections).forEach(section => {
     if (section) {
-      section.style.display = section.id === sectionId ? 'block' : 'none';
+      section.classList.toggle('active', section.id === sectionId);
     } else {
       console.error('Section DOM element not found:', sectionId);
     }
@@ -76,14 +82,11 @@ async function waitForFirebase() {
       loading.style.display = 'block';
       return false;
     }
-    console.log('Waiting for Firebase auth, attempt', attempts + 1, ':', {
-      firebaseInitialized: window.firebaseInitialized,
-      firebaseAuth: window.firebaseAuth
-    });
+    console.log('Waiting for Firebase auth, attempt', attempts + 1);
     await new Promise(resolve => setTimeout(resolve, 500));
     attempts++;
   }
-  console.log('Firebase auth ready:', window.firebaseAuth);
+  console.log('Firebase auth ready');
   return true;
 }
 
@@ -113,7 +116,8 @@ async function initializeAuth() {
         showSection('subscriptions');
       } else {
         authNav.innerHTML = `<a href="#login">Login</a>`;
-        showSection(window.location.hash.slice(1) || 'login');
+        const sectionId = window.location.hash.slice(1) || 'login';
+        showSection(sectionId);
       }
     });
   } catch (error) {
