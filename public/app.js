@@ -1,7 +1,9 @@
-// Use Firebase from window object
+import { signInWithCustomToken, onAuthStateChanged, signOut } from 'https://www.gstatic.com/firebasejs/9.23.0/firebase-auth.js';
+import { getToken } from 'https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging.js';
+
 const auth = window.firebaseAuth;
 const messaging = window.firebaseMessaging;
-const stripe = Stripe('pk_test_51YOURSTRIPEPUBLISHABLEKEY'); // Replace with your Stripe publishable key
+const stripe = Stripe('pk_live_Dg82e49VRbGtBVT8Y9gF4v6d'); // Replace with your Stripe publishable key
 
 // DOM elements
 const getStartedBtn = document.getElementById('get-started');
@@ -65,7 +67,7 @@ async function fetchSubscriptions() {
     `).join('');
   } catch (error) {
     console.error('Error fetching subscriptions:', error);
-    subscriptionsList.innerHTML = '<p>Error loading subscriptions</p>';
+    subscriptionsList.innerHTML = '<p.Error loading subscriptions</p>';
   }
   loading.style.display = 'none';
 }
@@ -175,7 +177,7 @@ async function fetchReferrals() {
       headers: { 'Authorization': `Bearer ${token}` }
     });
     const referrals = await response.json();
-    referralsList.innerHTML = referrals.map(r => `
+    subscriptionsList.innerHTML = referrals.map(r => `
       <p>Referred ${r.email} - Reward: £${r.reward}</p>
     `).join('');
   } catch (error) {
