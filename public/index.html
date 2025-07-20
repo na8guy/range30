@@ -47,17 +47,18 @@
     const { useState, useEffect } = React;
 
     // Backend URL (update to Render backend URL after deployment)
-    const BACKEND_URL = process.env.RENDER_BACKEND_URL || 'http://localhost:5001';
+const BACKEND_URL = process.env.RENDER_BACKEND_URL || 'https://range30.onrender.com';
 
     // Firebase Initialization
-    const firebaseConfig = {
-      apiKey: "YOUR_FIREBASE_API_KEY",
-      authDomain: "YOUR_FIREBASE_AUTH_DOMAIN",
-      projectId: "YOUR_FIREBASE_PROJECT_ID",
-      storageBucket: "YOUR_FIREBASE_STORAGE_BUCKET",
-      messagingSenderId: "YOUR_FIREBASE_MESSAGING_SENDER_ID",
-      appId: "YOUR_FIREBASE_APP_ID"
-    };
+   const firebaseConfig = {
+  apiKey: "AIzaSyC7GQ807LDYoViQ6kvm7mXyJfXHAfuQ7F8",
+  authDomain: "range30-b324b.firebaseapp.com",
+  projectId: "range30-b324b",
+  storageBucket: "range30-b324b.firebasestorage.app",
+  messagingSenderId: "117945302427",
+  appId: "1:117945302427:web:ac38a64a315ad597a6b53e",
+  measurementId: "G-951QQ94NL6"
+};
     firebase.initializeApp(firebaseConfig);
 
     // Google Analytics

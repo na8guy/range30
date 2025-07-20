@@ -18,24 +18,64 @@ const amadeus = new Amadeus({
 });
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+// Initialize Firebase Admin with error handling
+let firebaseInitialized = false;
+try {
+  if (process.env.FIREBASE_CREDENTIALS) {
+    const credentials = JSON.parse(process.env.FIREBASE_CREDENTIALS);
+    admin.initializeApp({
+      credential: admin.credential.cert(credentials)
+    });
+    firebaseInitialized = true;
+    console.log('Firebase Admin initialized successfully');
+  } else {
+    console.warn('FIREBASE_CREDENTIALS not set. Firebase features disabled.');
+  }
+} catch (error) {
+  console.error('Firebase initialization error:', error.message);
+}
+
 // Middleware
-app.use(cors({ origin: ['http://localhost:3000', 'http://localhost:5001', process.env.RENDER_FRONTEND_URL] }));
+app.use(cors({ 
+  origin: ['http://localhost:3000', 'http://localhost:5001', 'https://range30.onrender.com'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public'))); // Serve frontend
-app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
-
-// MongoDB Atlas Connection
-mongoose.set('strictQuery', true);
-mongoose.connect(process.env.MONGODB_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true
-}).then(() => console.log('Connected to MongoDB Atlas'))
-  .catch(err => console.error('MongoDB connection error:', err));
-
-// Initialize Firebase Admin
-admin.initializeApp({
-  credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_CREDENTIALS))
+app.use(express.static(path.join(__dirname, 'public')));
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'), err => {
+    if (err) {
+      console.error('Error serving index.html:', err);
+      res.status(500).send('Error serving frontend');
+    }
+  });
 });
+
+// MongoDB Atlas Connection with retry
+mongoose.set('strictQuery', true);
+const connectToMongoDB = async () => {
+  let retries = 5;
+  while (retries > 0) {
+    try {
+      await mongoose.connect(process.env.MONGODB_URI, {
+        useNewUrlParser: true,
+        useUnifiedTopology: true,
+        serverSelectionTimeoutMS: 30000 // Increase timeout to 30s
+      });
+      console.log('Connected to MongoDB Atlas');
+      return true;
+    } catch (err) {
+      console.error(`MongoDB connection attempt failed (${retries} retries left):`, err.message);
+      retries -= 1;
+      if (retries === 0) {
+        console.error('MongoDB connection failed after all retries');
+        return false;
+      }
+      await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5s before retry
+    }
+  }
+};
 
 // Schemas
 const userSchema = new mongoose.Schema({
@@ -85,42 +125,63 @@ const authenticateToken = (req, res, next) => {
 
 // Routes
 app.get('/api/subscriptions', async (req, res) => {
-  const subscriptions = await Subscription.find();
-  res.json(subscriptions);
+  try {
+    const subscriptions = await Subscription.find();
+    res.json(subscriptions);
+  } catch (error) {
+    console.error('Error fetching subscriptions:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
 });
 
 app.post('/api/register', async (req, res) => {
   const { name, email, password } = req.body;
-  const hashedPassword = await bcrypt.hash(password, 10);
-  const referralCode = Math.random().toString(36).substring(2, 8).toUpperCase();
   try {
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const referralCode = Math.random().toString(36).substring(2, 8).toUpperCase();
     const user = new User({ name, email, password: hashedPassword, referralCode });
     await user.save();
     const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '1h' });
     res.json({ token });
   } catch (error) {
+    console.error('Registration error:', error);
     res.status(400).json({ error: 'User already exists or invalid data' });
   }
 });
 
 app.post('/api/login', async (req, res) => {
   const { email, password } = req.body;
-  const user = await User.findOne({ email });
-  if (!user || !await bcrypt.compare(password, user.password)) {
-    return res.status(401).json({ error: 'Invalid credentials' });
+  try {
+    const user = await User.findOne({ email });
+    if (!user || !await bcrypt.compare(password, user.password)) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '1h' });
+    res.json({ token });
+  } catch (error) {
+    console.error('Login error:', error);
+    res.status(500).json({ error: 'Server error' });
   }
-  const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '1h' });
-  res.json({ token });
 });
 
 app.get('/api/user', authenticateToken, async (req, res) => {
-  const user = await User.findById(req.user.id).populate('subscription');
-  res.json(user);
+  try {
+    const user = await User.findById(req.user.id).populate('subscription');
+    res.json(user);
+  } catch (error) {
+    console.error('User fetch error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
 });
 
 app.get('/api/referrals', authenticateToken, async (req, res) => {
-  const user = await User.findById(req.user.id);
-  res.json(user.referrals);
+  try {
+    const user = await User.findById(req.user.id);
+    res.json(user.referrals);
+  } catch (error) {
+    console.error('Referrals fetch error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
 });
 
 app.post('/api/referrals', authenticateToken, async (req, res) => {
@@ -128,7 +189,7 @@ app.post('/api/referrals', authenticateToken, async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
     user.referrals.push({ email, reward: 50 });
-    if (user.notificationToken) {
+    if (firebaseInitialized && user.notificationToken) {
       await admin.messaging().send({
         token: user.notificationToken,
         notification: { title: 'New Referral', body: `You earned £50 for referring ${email}!` }
@@ -137,6 +198,7 @@ app.post('/api/referrals', authenticateToken, async (req, res) => {
     await user.save();
     res.json(user.referrals);
   } catch (error) {
+    console.error('Referral error:', error);
     res.status(500).json({ error: 'Referral error' });
   }
 });
@@ -254,31 +316,48 @@ app.post('/api/save-notification-token', authenticateToken, async (req, res) => 
     await User.findByIdAndUpdate(userId, { notificationToken: token });
     res.json({ message: 'Notification token saved' });
   } catch (error) {
+    console.error('Notification token error:', error);
     res.status(500).json({ error: 'Notification token error' });
   }
 });
 
 // Seed subscriptions
 const seedSubscriptions = async () => {
-  const subscriptions = [
-    { name: 'Solo Traveler', price: 60, budget: 1000, features: ['1 Trip/Year', '15% Discount', 'Travel Insurance', 'Solo Tours'] },
-    { name: 'Couple', price: 100, budget: 2000, features: ['1 Trip/Year', '20% Discount', 'Romantic Activities', 'Travel Insurance'] },
-    { name: 'Family', price: 200, budget: 4000, features: ['1 Trip/Year', '25% Discount', 'Family Activities', 'Travel Insurance'] },
-    { name: 'Group', price: 29.99, budget: 3000, features: ['1 Trip/Year', '20% Discount', 'Group Activities', 'Travel Insurance'] }
-  ];
-  await Subscription.deleteMany({});
-  await Subscription.insertMany(subscriptions);
-  const hashedPassword = await bcrypt.hash('password123', 10);
-  await User.deleteMany({});
-  await User.create({
-    name: 'Test User',
-    email: 'test@example.com',
-    password: hashedPassword,
-    referralCode: 'TEST123'
-  });
+  try {
+    const connected = await connectToMongoDB();
+    if (!connected) {
+      console.error('Skipping seeding due to MongoDB connection failure');
+      return;
+    }
+    const subscriptions = [
+      { name: 'Solo Traveler', price: 60, budget: 1000, features: ['1 Trip/Year', '15% Discount', 'Travel Insurance', 'Solo Tours'] },
+      { name: 'Couple', price: 100, budget: 2000, features: ['1 Trip/Year', '20% Discount', 'Romantic Activities', 'Travel Insurance'] },
+      { name: 'Family', price: 200, budget: 4000, features: ['1 Trip/Year', '25% Discount', 'Family Activities', 'Travel Insurance'] },
+      { name: 'Group', price: 29.99, budget: 3000, features: ['1 Trip/Year', '20% Discount', 'Group Activities', 'Travel Insurance'] }
+    ];
+    await Subscription.deleteMany({});
+    await Subscription.insertMany(subscriptions);
+    const hashedPassword = await bcrypt.hash('password123', 10);
+    await User.deleteMany({});
+    await User.create({
+      name: 'Test User',
+      email: 'test@example.com',
+      password: hashedPassword,
+      referralCode: 'TEST123'
+    });
+    console.log('Database seeded successfully');
+  } catch (error) {
+    console.error('Seeding error:', error);
+  }
 };
-seedSubscriptions();
 
-// Start server
-const PORT = process.env.PORT || 5001;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+// Start server only after MongoDB connection attempt
+connectToMongoDB().then(connected => {
+  if (connected) {
+    seedSubscriptions();
+  } else {
+    console.warn('Starting server without seeding due to MongoDB connection failure');
+  }
+  const PORT = process.env.PORT || 5001;
+  app.listen(PORT, '0.0.0.0', () => console.log(`Server running on port ${PORT}`));
+});
