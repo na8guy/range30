@@ -2,9 +2,7 @@ import { signInWithCustomToken, onAuthStateChanged, signOut } from 'https://www.
 import { getToken } from 'https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging.js';
 
 const BACKEND_URL = 'https://range30.onrender.com';
-const auth = window.firebaseAuth;
-const messaging = window.firebaseMessaging;
-const stripe = Stripe('pk_live_Dg82e49VRbGtBVT8Y9gF4v6d'); // Replace with your Stripe publishable key
+const stripe = Stripe('pk_test_51YOURSTRIPEPUBLISHABLEKEY'); // Replace with your Stripe publishable key
 
 // DOM elements
 const getStartedBtn = document.getElementById('get-started');
@@ -40,33 +38,44 @@ function showSection(sectionId) {
 
 // Wait for Firebase initialization
 async function waitForFirebase() {
-  const maxAttempts = 20;
+  const maxAttempts = 30;
   let attempts = 0;
-  while (!window.firebaseInitialized || !window.firebaseAuth) {
+  while (!window.firebaseInitialized || !window.firebaseAuth || typeof window.firebaseAuth !== 'object') {
     if (attempts >= maxAttempts) {
-      console.error('Firebase initialization timed out');
+      console.error('Firebase initialization timed out after', maxAttempts, 'attempts');
       document.getElementById('loading').innerText = 'Authentication service unavailable';
       document.getElementById('loading').style.display = 'block';
       return false;
     }
+    console.log('Waiting for Firebase auth, attempt', attempts + 1, ':', {
+      firebaseInitialized: window.firebaseInitialized,
+      firebaseAuth: window.firebaseAuth
+    });
     await new Promise(resolve => setTimeout(resolve, 500));
     attempts++;
-    console.log(`Waiting for Firebase auth, attempt ${attempts}`);
   }
+  console.log('Firebase auth ready:', window.firebaseAuth);
   return true;
 }
 
 // Authentication state
 async function initializeAuth() {
-  if (!(await waitForFirebase())) return;
-  if (!auth) {
-    console.error('Firebase Auth not initialized');
+  console.log('Starting auth initialization...');
+  if (!(await waitForFirebase())) {
+    console.error('Failed to initialize auth due to timeout');
+    return;
+  }
+  const auth = window.firebaseAuth;
+  if (!auth || typeof auth !== 'object') {
+    console.error('Firebase Auth not initialized:', auth);
     document.getElementById('loading').innerText = 'Authentication service unavailable';
     document.getElementById('loading').style.display = 'block';
     return;
   }
   try {
+    console.log('Setting up onAuthStateChanged...');
     onAuthStateChanged(auth, user => {
+      console.log('Auth state changed:', user ? 'User logged in' : 'No user');
       if (user) {
         authNav.innerHTML = `<a href="#logout">Logout</a>`;
         authNav.querySelector('a').addEventListener('click', () => {
@@ -117,14 +126,14 @@ async function fetchSubscriptions() {
 
 // Subscribe with Stripe
 async function subscribe(subscriptionId) {
-  if (!(await waitForFirebase()) || !auth.currentUser) {
+  if (!(await waitForFirebase()) || !window.firebaseAuth?.currentUser) {
     alert('Please log in to subscribe');
     showSection('login');
     return;
   }
   loading.style.display = 'block';
   try {
-    const user = auth.currentUser;
+    const user = window.firebaseAuth.currentUser;
     const token = await user.getIdToken();
     const response = await fetch(`${BACKEND_URL}/api/create-checkout-session`, {
       method: 'POST',
@@ -146,14 +155,14 @@ async function subscribe(subscriptionId) {
 // Trip planner
 tripPlannerForm.addEventListener('submit', async (e) => {
   e.preventDefault();
-  if (!(await waitForFirebase()) || !auth.currentUser) {
+  if (!(await waitForFirebase()) || !window.firebaseAuth?.currentUser) {
     alert('Please log in to plan a trip');
     showSection('login');
     return;
   }
   loading.style.display = 'block';
   try {
-    const user = auth.currentUser;
+    const user = window.firebaseAuth.currentUser;
     const token = await user.getIdToken();
     const response = await fetch(`${BACKEND_URL}/api/ai-trip-planner`, {
       method: 'POST',
@@ -189,14 +198,14 @@ tripPlannerForm.addEventListener('submit', async (e) => {
 
 // Top-up with Stripe
 async function topUp(amount, userId) {
-  if (!(await waitForFirebase()) || !auth.currentUser) {
+  if (!(await waitForFirebase()) || !window.firebaseAuth?.currentUser) {
     alert('Please log in to top up');
     showSection('login');
     return;
   }
   loading.style.display = 'block';
   try {
-    const token = await auth.currentUser.getIdToken();
+    const token = await window.firebaseAuth.currentUser.getIdToken();
     const response = await fetch(`${BACKEND_URL}/api/create-topup-session`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
@@ -217,14 +226,14 @@ async function topUp(amount, userId) {
 // Referrals
 referralForm.addEventListener('submit', async (e) => {
   e.preventDefault();
-  if (!(await waitForFirebase()) || !auth.currentUser) {
+  if (!(await waitForFirebase()) || !window.firebaseAuth?.currentUser) {
     alert('Please log in to submit a referral');
     showSection('login');
     return;
   }
   loading.style.display = 'block';
   try {
-    const user = auth.currentUser;
+    const user = window.firebaseAuth.currentUser;
     const token = await user.getIdToken();
     const response = await fetch(`${BACKEND_URL}/api/referrals`, {
       method: 'POST',
@@ -244,13 +253,13 @@ referralForm.addEventListener('submit', async (e) => {
 });
 
 async function fetchReferrals() {
-  if (!(await waitForFirebase()) || !auth.currentUser) {
+  if (!(await waitForFirebase()) || !window.firebaseAuth?.currentUser) {
     referralsList.innerHTML = '<p>Please log in to view referrals</p>';
     return;
   }
   loading.style.display = 'block';
   try {
-    const user = auth.currentUser;
+    const user = window.firebaseAuth.currentUser;
     const token = await user.getIdToken();
     const response = await fetch(`${BACKEND_URL}/api/referrals`, {
       headers: { 'Authorization': `Bearer ${token}` }
@@ -272,7 +281,7 @@ async function fetchReferrals() {
 // Login
 loginForm.addEventListener('submit', async (e) => {
   e.preventDefault();
-  if (!(await waitForFirebase()) || !auth) {
+  if (!(await waitForFirebase()) || !window.firebaseAuth) {
     alert('Authentication service unavailable');
     return;
   }
@@ -289,7 +298,7 @@ loginForm.addEventListener('submit', async (e) => {
       throw new Error(`HTTP error! Status: ${response.status}`);
     }
     const { token } = await response.json();
-    await signInWithCustomToken(auth, token);
+    await signInWithCustomToken(window.firebaseAuth, token);
   } catch (error) {
     console.error('Login error:', error);
     alert('Login failed: ' + error.message);
@@ -300,7 +309,7 @@ loginForm.addEventListener('submit', async (e) => {
 // Register
 registerForm.addEventListener('submit', async (e) => {
   e.preventDefault();
-  if (!(await waitForFirebase()) || !auth) {
+  if (!(await waitForFirebase()) || !window.firebaseAuth) {
     alert('Authentication service unavailable');
     return;
   }
@@ -318,7 +327,7 @@ registerForm.addEventListener('submit', async (e) => {
       throw new Error(`HTTP error! Status: ${response.status}`);
     }
     const { token } = await response.json();
-    await signInWithCustomToken(auth, token);
+    await signInWithCustomToken(window.firebaseAuth, token);
   } catch (error) {
     console.error('Register error:', error);
     alert('Registration failed: ' + error.message);
@@ -328,7 +337,7 @@ registerForm.addEventListener('submit', async (e) => {
 
 // Get Started button
 getStartedBtn.addEventListener('click', async () => {
-  if (await waitForFirebase() && auth?.currentUser) {
+  if (await waitForFirebase() && window.firebaseAuth?.currentUser) {
     showSection('subscriptions');
   } else {
     showSection('login');
@@ -336,14 +345,14 @@ getStartedBtn.addEventListener('click', async () => {
 });
 
 // Request notification permission
-if (messaging && (await waitForFirebase())) {
+if (window.firebaseMessaging && (await waitForFirebase())) {
   try {
-    await messaging.requestPermission();
-    const token = await getToken(messaging, { vapidKey: window.vapidKey });
+    await window.firebaseMessaging.requestPermission();
+    const token = await getToken(window.firebaseMessaging, { vapidKey: window.vapidKey });
     await fetch(`${BACKEND_URL}/api/save-notification-token`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${await auth?.currentUser?.getIdToken()}` },
-      body: JSON.stringify({ token, userId: auth?.currentUser?.uid })
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${await window.firebaseAuth?.currentUser?.getIdToken()}` },
+      body: JSON.stringify({ token, userId: window.firebaseAuth?.currentUser?.uid })
     });
   } catch (error) {
     console.error('Notification permission error:', error);

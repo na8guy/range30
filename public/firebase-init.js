@@ -51,8 +51,14 @@ async function initializeFirebase() {
     window.firebaseAuth = auth;
     window.firebaseMessaging = messaging;
     window.vapidKey = firebaseConfig.vapidKey;
-    window.firebaseInitialized = true; // Signal initialization complete
+    window.firebaseInitialized = true;
     console.log('Firebase initialized successfully:', { auth: !!auth, messaging: !!messaging });
+    console.log('Window objects after initialization:', {
+      firebaseApp: !!window.firebaseApp,
+      firebaseAuth: !!window.firebaseAuth,
+      firebaseMessaging: !!window.firebaseMessaging,
+      firebaseInitialized: window.firebaseInitialized
+    });
   } catch (error) {
     console.error('Error initializing Firebase:', error.message);
     document.getElementById('loading').innerText = 'Failed to initialize authentication. Please try again later.';
