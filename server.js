@@ -99,7 +99,7 @@ async function validateIataCode(code, amadeus) {
       subType: 'AIRPORT,CITY',
       keyword: code.toUpperCase()
     });
-    return response.data.length > 0;
+    return response.data.length > 0 ? response.data[0].iataCode : false;
   } catch (error) {
     console.error('IATA code validation error:', error.response?.data || error.message);
     return false;
@@ -314,7 +314,7 @@ app.get('/api/destination-suggestions', async (req, res) => {
     res.json(suggestions);
   } catch (error) {
     console.error('Destination suggestions error:', error.response?.data || error.message);
-    res.status(500).json({ error: `Failed to fetch destination suggestions: ${error.message}` });
+    res.status(500).json({ error: `Failed to fetch destination suggestions: ${error.response?.data?.errors?.[0]?.detail || error.message}` });
   }
 });
 
@@ -353,19 +353,20 @@ app.post('/api/ai-trip-planner', authMiddleware, async (req, res) => {
     });
 
     // Validate destination
-    const isValidDestination = await validateIataCode(destination, amadeus);
-    if (!isValidDestination) {
+    const validatedCode = await validateIataCode(destination, amadeus);
+    if (!validatedCode) {
       console.error('Invalid destination code:', destination);
       return res.status(400).json({ error: `Invalid destination code: ${destination}. Please use a valid IATA code (e.g., JFK, LAX).` });
     }
+    const cityCode = validatedCode; // Use validated IATA code
 
-    // Fetch flight and hotel data
-    let flightOffers = { data: [] }, hotelOffers = { data: [] };
+    // Fetch flight offers
+    let flightOffers = { data: [] };
     try {
-      console.log('Fetching flight offers:', { origin: 'LON', destination, startDate, endDate, budget });
+      console.log('Fetching flight offers:', { origin: 'LON', destination: cityCode, startDate, endDate, budget });
       flightOffers = await amadeus.shopping.flightOffersSearch.get({
         originLocationCode: 'LON',
-        destinationLocationCode: destination.toUpperCase(),
+        destinationLocationCode: cityCode,
         departureDate: startDate,
         returnDate: endDate,
         adults: 1,
@@ -374,28 +375,62 @@ app.post('/api/ai-trip-planner', authMiddleware, async (req, res) => {
         max: 10
       });
       if (!flightOffers.data?.length) {
-        console.warn('No flight offers found:', { destination, startDate, endDate });
+        console.warn('No flight offers found:', { destination: cityCode, startDate, endDate });
       }
     } catch (amadeusError) {
       console.error('Amadeus flight search error:', amadeusError.response?.data || amadeusError);
       return res.status(500).json({ error: `Failed to fetch flight data from Amadeus: ${amadeusError.response?.data?.errors?.[0]?.detail || amadeusError.message}` });
     }
 
+    // Verify flight prices
+    let priceStatus = 'unknown';
     try {
-      console.log('Fetching hotel offers:', { cityCode: destination.toUpperCase(), startDate, endDate });
+      const priceAnalysis = await amadeus.analytics.flightPriceAnalysis.get({
+        originLocationCode: 'LON',
+        destinationLocationCode: cityCode,
+        departureDate: startDate,
+        returnDate: endDate,
+        currencyCode: 'GBP'
+      });
+      const avgPrice = parseFloat(priceAnalysis.data?.averagePrice || Infinity);
+      priceStatus = budget >= avgPrice ? 'reasonable' : 'below_average';
+      console.log('Flight price analysis:', { averagePrice: avgPrice, budget, status: priceStatus });
+    } catch (error) {
+      console.warn('Flight price analysis error:', error.response?.data || error.message);
+    }
+
+    // Fetch hotel offers
+    let hotelOffers = { data: [] };
+    try {
+      console.log('Fetching hotel offers:', { cityCode, startDate, endDate });
       hotelOffers = await amadeus.shopping.hotelOffersSearch.get({
-        cityCode: destination.toUpperCase(),
+        cityCode: cityCode,
         checkInDate: startDate,
         checkOutDate: endDate,
         adults: 1,
         max: 10
       });
       if (!hotelOffers.data?.length) {
-        console.warn('No hotel offers found:', { destination, startDate, endDate });
+        console.warn('No hotel offers found:', { cityCode, startDate, endDate });
       }
     } catch (amadeusError) {
       console.error('Amadeus hotel search error:', amadeusError.response?.data || amadeusError);
       return res.status(500).json({ error: `Failed to fetch hotel data from Amadeus: ${amadeusError.response?.data?.errors?.[0]?.detail || amadeusError.message}` });
+    }
+
+    // Fetch points of interest
+    let activities = ['Explore local attractions'];
+    try {
+      const poiResponse = await amadeus.referenceData.locations.pointsOfInterest.get({
+        latitude: 0, // Placeholder; ideally fetch city coordinates
+        longitude: 0,
+        radius: 10,
+        category: preferences.toUpperCase().includes('ADVENTURE') ? 'SIGHTS' : 'RESTAURANT'
+      });
+      activities = poiResponse.data.slice(0, 5).map(poi => poi.name || 'Unnamed attraction');
+      console.log('Points of interest fetched:', activities);
+    } catch (error) {
+      console.warn('Points of interest error:', error.response?.data || error.message);
     }
 
     // Generate multiple trip plans
@@ -429,13 +464,14 @@ app.post('/api/ai-trip-planner', authMiddleware, async (req, res) => {
         const tripPlan = {
           destination,
           cost,
-          activities: completion.choices[0].message.content.split('\n').filter(line => line.startsWith('-')),
+          activities: activities.length > 1 ? activities : completion.choices[0].message.content.split('\n').filter(line => line.startsWith('-')),
           hotels: filteredHotels.length ? filteredHotels.map(h => h.hotel?.name || 'Unknown Hotel') : ['No hotels available'],
-          flights: filteredFlights.length ? filteredFlights.map(f => `${f.itineraries[0].segments[0].departure.iataCode}-${f.itineraries[0].segments[0].arrival.iataCode}` || 'Unknown Flight') : ['No flights available'],
+          flights: filteredFlights.length ? filteredFlights.map(f => `${f.itineraries[0].segments[0].departure.iataCode}-${f.itineraries[0].segments[0].arrival.iataCode}`) : ['No flights available'],
           carbonFootprint: calculateCarbonFootprint(filteredFlights),
           topUpRequired: allowTopUp && cost > budget,
           topUpAmount: cost > budget ? cost - budget : 0,
-          planType: plan.type
+          planType: plan.type,
+          priceStatus
         };
 
         await Trip.create({ userId, ...tripPlan });

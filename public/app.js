@@ -282,6 +282,7 @@ tripPlannerForm.addEventListener('submit', async (e) => {
         <h3>${plan.planType.charAt(0).toUpperCase() + plan.planType.slice(1)} Trip to ${plan.destination}</h3>
         ${plan.error ? `<p>Error: ${plan.error}</p>` : `
           <p>Cost: £${plan.cost.toFixed(2)}</p>
+          <p>Price Status: ${plan.priceStatus === 'reasonable' ? 'Within average market rates' : 'Below average market rates'}</p>
           <p>Activities: ${plan.activities.join(', ')}</p>
           <p>Hotels: ${plan.hotels.join(', ')}</p>
           <p>Flights: ${plan.flights.join(', ')}</p>
