@@ -203,39 +203,78 @@ async function subscribe(subscriptionId) {
   loading.style.display = 'none';
 }
 
-// Destination suggestions
-async function fetchSuggestions(query) {
+// City suggestions
+async function fetchCitySuggestions(query) {
   try {
-    const response = await fetch(`${BACKEND_URL}/api/destination-suggestions?query=${encodeURIComponent(query)}`);
+    const response = await fetch(`${BACKEND_URL}/api/city-suggestions?query=${encodeURIComponent(query)}`);
     if (!response.ok) {
       const text = await response.text();
       throw new Error(`HTTP error! Status: ${response.status}, Response: ${text}`);
     }
     const suggestions = await response.json();
     suggestionsContainer.innerHTML = suggestions.map(s => `
-      <div class="suggestion" data-code="${s.code}">${s.name} (${s.code}) - ${s.city}, ${s.country}</div>
+      <div class="suggestion" data-city="${s.cityName}">
+        ${s.cityName}, ${s.country}
+      </div>
     `).join('');
     suggestionsContainer.style.display = suggestions.length ? 'block' : 'none';
     document.querySelectorAll('.suggestion').forEach(item => {
       item.addEventListener('click', () => {
-        destinationInput.value = item.dataset.code;
+        destinationInput.value = item.dataset.city;
+        suggestionsContainer.innerHTML = '';
+        suggestionsContainer.style.display = 'none';
+        fetchDestinationSuggestions();
+      });
+    });
+  } catch (error) {
+    console.error('City suggestions error:', error.message);
+    suggestionsContainer.innerHTML = `<p>Error loading suggestions: ${error.message}</p>`;
+  }
+}
+
+// Destination suggestions
+async function fetchDestinationSuggestions() {
+  try {
+    const response = await fetch(`${BACKEND_URL}/api/destination-suggestions`);
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`HTTP error! Status: ${response.status}, Response: ${text}`);
+    }
+    const suggestions = await response.json();
+    suggestionsContainer.innerHTML = suggestions.map(s => `
+      <div class="suggestion" data-city="${s.cityName}">
+        ${s.cityName}, ${s.country} - €${s.price} (Depart: ${s.departureDate}, Return: ${s.returnDate})
+      </div>
+    `).join('');
+    suggestionsContainer.style.display = suggestions.length ? 'block' : 'none';
+    document.querySelectorAll('.suggestion').forEach(item => {
+      item.addEventListener('click', () => {
+        destinationInput.value = item.dataset.city;
         suggestionsContainer.innerHTML = '';
         suggestionsContainer.style.display = 'none';
       });
     });
   } catch (error) {
-    console.error('Suggestions error:', error.message);
+    console.error('Destination suggestions error:', error.message);
     suggestionsContainer.innerHTML = `<p>Error loading suggestions: ${error.message}</p>`;
   }
 }
 
+// Trigger city suggestions on input
 destinationInput.addEventListener('input', (e) => {
   const query = e.target.value.trim();
   if (query.length >= 2) {
-    fetchSuggestions(query);
+    fetchCitySuggestions(query);
   } else {
     suggestionsContainer.innerHTML = '';
     suggestionsContainer.style.display = 'none';
+  }
+});
+
+// Trigger destination suggestions on focus if input is empty
+destinationInput.addEventListener('focus', () => {
+  if (!destinationInput.value.trim()) {
+    fetchDestinationSuggestions();
   }
 });
 

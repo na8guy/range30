@@ -7,6 +7,7 @@ const OpenAI = require('openai');
 const Stripe = require('stripe');
 const path = require('path');
 const cors = require('cors');
+const fetch = require('node-fetch');
 require('dotenv').config();
 
 const app = express();
@@ -38,7 +39,7 @@ try {
 } catch (error) {
   console.error('Firebase Admin initialization error:', error);
   process.exit(1);
-}
+};
 
 // MongoDB Schemas
 const userSchema = new mongoose.Schema({
@@ -67,7 +68,8 @@ const tripSchema = new mongoose.Schema({
   carbonFootprint: Number,
   topUpRequired: Boolean,
   topUpAmount: Number,
-  planType: String
+  planType: String,
+  priceStatus: String
 });
 
 const User = mongoose.model('User', userSchema);
@@ -92,17 +94,57 @@ const authMiddleware = async (req, res, next) => {
   }
 };
 
-// Validate IATA code
-async function validateIataCode(code, amadeus) {
+// Get Amadeus Access Token (for v3 API)
+async function getAmadeusAccessToken() {
+  try {
+    const response = await fetch('https://test.api.amadeus.com/v1/security/oauth2/token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body: `grant_type=client_credentials&client_id=${encodeURIComponent(process.env.AMADEUS_API_KEY)}&client_secret=${encodeURIComponent(process.env.AMADEUS_API_SECRET)}`
+    });
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(`Failed to get Amadeus token: ${errorData.error_description || response.statusText}`);
+    }
+    const { access_token } = await response.json();
+    return access_token;
+  } catch (error) {
+    console.error('Amadeus token error:', error.message);
+    throw error;
+  }
+}
+
+// Get city code and nearest airport
+async function getCityDetails(cityName, amadeus) {
   try {
     const response = await amadeus.referenceData.locations.get({
-      subType: 'AIRPORT,CITY',
-      keyword: code.toUpperCase()
+      subType: 'CITY',
+      keyword: cityName,
+      'page[limit]': 1
     });
-    return response.data.length > 0 ? response.data[0].iataCode : false;
+    if (response.data.length === 0) {
+      return null;
+    }
+    const city = response.data[0];
+    // Get airports for the city
+    const airportResponse = await amadeus.referenceData.locations.get({
+      subType: 'AIRPORT',
+      keyword: city.address.cityCode
+    });
+    const airports = airportResponse.data.map(a => a.iataCode);
+    return {
+      cityCode: city.address.cityCode,
+      cityName: city.name || city.address.cityName,
+      country: city.address.countryName || 'Unknown',
+      airports: airports.length > 0 ? airports : [city.address.cityCode], // Fallback to city code
+      latitude: city.geoCode?.latitude || 0,
+      longitude: city.geoCode?.longitude || 0
+    };
   } catch (error) {
-    console.error('IATA code validation error:', error.response?.data || error.message);
-    return false;
+    console.error('City details error:', error.response?.data || error.message);
+    return null;
   }
 }
 
@@ -289,8 +331,8 @@ app.post('/api/save-notification-token', authMiddleware, async (req, res) => {
   }
 });
 
-// Destination Suggestions
-app.get('/api/destination-suggestions', async (req, res) => {
+// City Suggestions
+app.get('/api/city-suggestions', async (req, res) => {
   try {
     const { query } = req.query;
     if (!query || query.length < 2) {
@@ -301,16 +343,50 @@ app.get('/api/destination-suggestions', async (req, res) => {
       clientSecret: process.env.AMADEUS_API_SECRET
     });
     const response = await amadeus.referenceData.locations.get({
-      subType: 'AIRPORT,CITY',
+      subType: 'CITY',
       keyword: query.toUpperCase(),
       'page[limit]': 10
     });
-    const suggestions = response.data.map(loc => ({
-      code: loc.iataCode || loc.id,
-      name: loc.name || loc.address.cityName,
-      city: loc.address?.cityName || loc.name,
-      country: loc.address?.countryName || 'Unknown'
+    const suggestions = response.data.map(city => ({
+      cityCode: city.address.cityCode,
+      cityName: city.name || city.address.cityName,
+      country: city.address.countryName || 'Unknown'
     }));
+    res.json(suggestions);
+  } catch (error) {
+    console.error('City suggestions error:', error.response?.data || error.message);
+    res.status(500).json({ error: `Failed to fetch city suggestions: ${error.response?.data?.errors?.[0]?.detail || error.message}` });
+  }
+});
+
+// Destination Suggestions
+app.get('/api/destination-suggestions', async (req, res) => {
+  try {
+    const amadeus = new Amadeus({
+      clientId: process.env.AMADEUS_API_KEY,
+      clientSecret: process.env.AMADEUS_API_SECRET
+    });
+    const originCityDetails = await getCityDetails('Paris', amadeus);
+    if (!originCityDetails || !originCityDetails.airports.length) {
+      return res.status(400).json({ error: 'Invalid origin city: Paris' });
+    }
+    const originAirport = originCityDetails.airports[0]; // Use first airport (e.g., CDG)
+    const response = await amadeus.shopping.flightDestinations.get({
+      origin: originAirport,
+      maxPrice: 200
+    });
+    const suggestions = [];
+    for (const dest of response.data) {
+      const destCityDetails = await getCityDetails(dest.destination, amadeus);
+      suggestions.push({
+        cityCode: destCityDetails?.cityCode || dest.destination,
+        cityName: destCityDetails?.cityName || dest.destination,
+        country: destCityDetails?.country || 'Unknown',
+        price: parseFloat(dest.price.total).toFixed(2),
+        departureDate: dest.departureDate,
+        returnDate: dest.returnDate
+      });
+    }
     res.json(suggestions);
   } catch (error) {
     console.error('Destination suggestions error:', error.response?.data || error.message);
@@ -352,33 +428,56 @@ app.post('/api/ai-trip-planner', authMiddleware, async (req, res) => {
       clientSecret: process.env.AMADEUS_API_SECRET
     });
 
-    // Validate destination
-    const validatedCode = await validateIataCode(destination, amadeus);
-    if (!validatedCode) {
-      console.error('Invalid destination code:', destination);
-      return res.status(400).json({ error: `Invalid destination code: ${destination}. Please use a valid IATA code (e.g., JFK, LAX).` });
+    // Get city details for destination
+    const destCityDetails = await getCityDetails(destination, amadeus);
+    if (!destCityDetails || !destCityDetails.cityCode) {
+      console.error('Invalid destination city:', destination);
+      return res.status(400).json({ error: `Invalid destination city: ${destination}` });
     }
-    const cityCode = validatedCode; // Use validated IATA code
+    const cityCode = destCityDetails.cityCode;
+    const destAirport = destCityDetails.airports[0]; // Use first airport
 
-    // Fetch flight offers
+    // Get origin city details (Paris)
+    const originCityDetails = await getCityDetails('Paris', amadeus);
+    if (!originCityDetails || !originCityDetails.airports.length) {
+      console.error('Invalid origin city: Paris');
+      return res.status(400).json({ error: 'Invalid origin city: Paris' });
+    }
+    const originAirport = originCityDetails.airports[0]; // e.g., CDG
+
+    // Fetch flight offers (v3 REST API)
     let flightOffers = { data: [] };
     try {
-      console.log('Fetching flight offers:', { origin: 'LON', destination: cityCode, startDate, endDate, budget });
-      flightOffers = await amadeus.shopping.flightOffersSearch.get({
-        originLocationCode: 'LON',
-        destinationLocationCode: cityCode,
-        departureDate: startDate,
-        returnDate: endDate,
-        adults: 1,
-        maxPrice: Math.floor(budget * 1.5),
-        currencyCode: 'GBP',
-        max: 10
+      console.log('Fetching flight offers (v3):', { origin: originAirport, destination: destAirport, startDate, endDate, budget });
+      const accessToken = await getAmadeusAccessToken();
+      const response = await fetch(`https://test.api.amadeus.com/v3/shopping/flight-offers?originLocationCode=${originAirport}&destinationLocationCode=${destAirport}&departureDate=${startDate}&returnDate=${endDate}&adults=1&maxPrice=${Math.floor(budget * 1.5)}&currencyCode=GBP&max=10`, {
+        headers: {
+          'Authorization': `Bearer ${accessToken}`
+        }
       });
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error('Flight offers v3 error:', errorData);
+        // Fallback to v2
+        console.log('Falling back to v2 Flight Offers Search');
+        flightOffers = await amadeus.shopping.flightOffersSearch.get({
+          originLocationCode: originAirport,
+          destinationLocationCode: destAirport,
+          departureDate: startDate,
+          returnDate: endDate,
+          adults: 1,
+          maxPrice: Math.floor(budget * 1.5),
+          currencyCode: 'GBP',
+          max: 10
+        });
+      } else {
+        flightOffers = await response.json();
+      }
       if (!flightOffers.data?.length) {
-        console.warn('No flight offers found:', { destination: cityCode, startDate, endDate });
+        console.warn('No flight offers found:', { destination: destAirport, startDate, endDate });
       }
     } catch (amadeusError) {
-      console.error('Amadeus flight search error:', amadeusError.response?.data || amadeusError);
+      console.error('Amadeus flight search error:', amadeusError.response?.data || amadeusError.message);
       return res.status(500).json({ error: `Failed to fetch flight data from Amadeus: ${amadeusError.response?.data?.errors?.[0]?.detail || amadeusError.message}` });
     }
 
@@ -386,8 +485,8 @@ app.post('/api/ai-trip-planner', authMiddleware, async (req, res) => {
     let priceStatus = 'unknown';
     try {
       const priceAnalysis = await amadeus.analytics.flightPriceAnalysis.get({
-        originLocationCode: 'LON',
-        destinationLocationCode: cityCode,
+        originLocationCode: originAirport,
+        destinationLocationCode: destAirport,
         departureDate: startDate,
         returnDate: endDate,
         currencyCode: 'GBP'
@@ -422,8 +521,8 @@ app.post('/api/ai-trip-planner', authMiddleware, async (req, res) => {
     let activities = ['Explore local attractions'];
     try {
       const poiResponse = await amadeus.referenceData.locations.pointsOfInterest.get({
-        latitude: 0, // Placeholder; ideally fetch city coordinates
-        longitude: 0,
+        latitude: destCityDetails.latitude,
+        longitude: destCityDetails.longitude,
         radius: 10,
         category: preferences.toUpperCase().includes('ADVENTURE') ? 'SIGHTS' : 'RESTAURANT'
       });
@@ -444,7 +543,7 @@ app.post('/api/ai-trip-planner', authMiddleware, async (req, res) => {
 
     for (const plan of planTypes) {
       const planBudget = budget * plan.budgetFactor;
-      const prompt = `Plan a ${plan.type} trip to ${destination} from ${startDate} to ${endDate} with a budget of £${planBudget}. Preferences: ${preferences}. Include activities, hotels, and flights. Return a list of activities starting with "-".`;
+      const prompt = `Plan a ${plan.type} trip to ${destCityDetails.cityName} from ${startDate} to ${endDate} with a budget of £${planBudget}. Preferences: ${preferences}. Include activities, hotels, and flights. Return a list of activities starting with "-".`;
       try {
         console.log('Generating trip plan:', { type: plan.type, prompt });
         const completion = await openai.chat.completions.create({
@@ -462,7 +561,7 @@ app.post('/api/ai-trip-planner', authMiddleware, async (req, res) => {
 
         const cost = calculateTotalCost(filteredFlights, filteredHotels);
         const tripPlan = {
-          destination,
+          destination: destCityDetails.cityName,
           cost,
           activities: activities.length > 1 ? activities : completion.choices[0].message.content.split('\n').filter(line => line.startsWith('-')),
           hotels: filteredHotels.length ? filteredHotels.map(h => h.hotel?.name || 'Unknown Hotel') : ['No hotels available'],
