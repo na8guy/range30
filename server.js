@@ -116,19 +116,30 @@ async function getAmadeusAccessToken() {
   }
 }
 
+// Sample static city dataset (replace with GeoNames for full coverage)
+const staticCities = [
+  { cityName: 'Timbuktu', cityCode: 'TOM', country: 'Mali', airports: ['TOM'], latitude: 16.7735, longitude: -3.0074 },
+  { cityName: 'Ulaanbaatar', cityCode: 'ULN', country: 'Mongolia', airports: ['ULN'], latitude: 47.9077, longitude: 106.8832 },
+  { cityName: 'Reykjavik', cityCode: 'REK', country: 'Iceland', airports: ['KEF'], latitude: 64.1355, longitude: -21.8954 }
+];
+
 // Get city code and nearest airport
 async function getCityDetails(cityName, amadeus) {
   try {
     const response = await amadeus.referenceData.locations.get({
       subType: 'CITY',
-      keyword: cityName,
+      keyword: cityName.toUpperCase(),
       'page[limit]': 1
     });
     if (response.data.length === 0) {
+      // Fallback to static dataset
+      const staticMatch = staticCities.find(c => c.cityName.toLowerCase() === cityName.toLowerCase());
+      if (staticMatch) {
+        return staticMatch;
+      }
       return null;
     }
     const city = response.data[0];
-    // Get airports for the city
     const airportResponse = await amadeus.referenceData.locations.get({
       subType: 'AIRPORT',
       keyword: city.address.cityCode
@@ -138,13 +149,32 @@ async function getCityDetails(cityName, amadeus) {
       cityCode: city.address.cityCode,
       cityName: city.name || city.address.cityName,
       country: city.address.countryName || 'Unknown',
-      airports: airports.length > 0 ? airports : [city.address.cityCode], // Fallback to city code
+      airports: airports.length > 0 ? airports : [city.address.cityCode],
       latitude: city.geoCode?.latitude || 0,
       longitude: city.geoCode?.longitude || 0
     };
   } catch (error) {
     console.error('City details error:', error.response?.data || error.message);
-    return null;
+    // Fallback to static dataset
+    const staticMatch = staticCities.find(c => c.cityName.toLowerCase() === cityName.toLowerCase());
+    return staticMatch || null;
+  }
+}
+
+// Validate city code for hotel search
+async function validateHotelCityCode(cityCode, amadeus) {
+  try {
+    const response = await amadeus.shopping.hotelOffersSearch.get({
+      cityCode: cityCode,
+      checkInDate: '2025-08-01', // Test date
+      checkOutDate: '2025-08-02',
+      adults: 1,
+      max: 1
+    });
+    return response.data.length > 0;
+  } catch (error) {
+    console.error('Hotel city code validation error:', error.response?.data || error.message);
+    return false;
   }
 }
 
@@ -335,8 +365,8 @@ app.post('/api/save-notification-token', authMiddleware, async (req, res) => {
 app.get('/api/city-suggestions', async (req, res) => {
   try {
     const { query } = req.query;
-    if (!query || query.length < 2) {
-      return res.status(400).json({ error: 'Query must be at least 2 characters' });
+    if (!query || query.length < 1) {
+      return res.status(400).json({ error: 'Query must be at least 1 character' });
     }
     const amadeus = new Amadeus({
       clientId: process.env.AMADEUS_API_KEY,
@@ -345,17 +375,39 @@ app.get('/api/city-suggestions', async (req, res) => {
     const response = await amadeus.referenceData.locations.get({
       subType: 'CITY',
       keyword: query.toUpperCase(),
-      'page[limit]': 10
+      sort: 'analytics.travelers.score', // Prioritize popular cities
+      'page[limit]': 20 // Increase limit for broader coverage
     });
-    const suggestions = response.data.map(city => ({
+    let suggestions = response.data.map(city => ({
       cityCode: city.address.cityCode,
       cityName: city.name || city.address.cityName,
       country: city.address.countryName || 'Unknown'
     }));
-    res.json(suggestions);
+    // Fallback to static dataset for additional cities
+    const staticMatches = staticCities
+      .filter(c => c.cityName.toLowerCase().startsWith(query.toLowerCase()))
+      .map(c => ({
+        cityCode: c.cityCode,
+        cityName: c.cityName,
+        country: c.country
+      }));
+    suggestions = [...new Set([...suggestions, ...staticMatches].map(s => JSON.stringify(s)))].map(s => JSON.parse(s));
+    res.json(suggestions.slice(0, 20)); // Limit to 20 to avoid overwhelming UI
   } catch (error) {
     console.error('City suggestions error:', error.response?.data || error.message);
-    res.status(500).json({ error: `Failed to fetch city suggestions: ${error.response?.data?.errors?.[0]?.detail || error.message}` });
+    // Return static matches if Amadeus fails
+    const staticMatches = staticCities
+      .filter(c => c.cityName.toLowerCase().startsWith(query.toLowerCase()))
+      .map(c => ({
+        cityCode: c.cityCode,
+        cityName: c.cityName,
+        country: c.country
+      }));
+    if (staticMatches.length > 0) {
+      res.json(staticMatches.slice(0, 20));
+    } else {
+      res.status(500).json({ error: `Failed to fetch city suggestions: ${error.response?.data?.errors?.[0]?.detail || error.message}` });
+    }
   }
 });
 
@@ -370,7 +422,7 @@ app.get('/api/destination-suggestions', async (req, res) => {
     if (!originCityDetails || !originCityDetails.airports.length) {
       return res.status(400).json({ error: 'Invalid origin city: Paris' });
     }
-    const originAirport = originCityDetails.airports[0]; // Use first airport (e.g., CDG)
+    const originAirport = originCityDetails.airports[0];
     const response = await amadeus.shopping.flightDestinations.get({
       origin: originAirport,
       maxPrice: 200
@@ -435,7 +487,7 @@ app.post('/api/ai-trip-planner', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: `Invalid destination city: ${destination}` });
     }
     const cityCode = destCityDetails.cityCode;
-    const destAirport = destCityDetails.airports[0]; // Use first airport
+    const destAirport = destCityDetails.airports[0];
 
     // Get origin city details (Paris)
     const originCityDetails = await getCityDetails('Paris', amadeus);
@@ -443,7 +495,7 @@ app.post('/api/ai-trip-planner', authMiddleware, async (req, res) => {
       console.error('Invalid origin city: Paris');
       return res.status(400).json({ error: 'Invalid origin city: Paris' });
     }
-    const originAirport = originCityDetails.airports[0]; // e.g., CDG
+    const originAirport = originCityDetails.airports[0];
 
     // Fetch flight offers (v3 REST API)
     let flightOffers = { data: [] };
@@ -458,7 +510,6 @@ app.post('/api/ai-trip-planner', authMiddleware, async (req, res) => {
       if (!response.ok) {
         const errorData = await response.json();
         console.error('Flight offers v3 error:', errorData);
-        // Fallback to v2
         console.log('Falling back to v2 Flight Offers Search');
         flightOffers = await amadeus.shopping.flightOffersSearch.get({
           originLocationCode: originAirport,
@@ -501,20 +552,26 @@ app.post('/api/ai-trip-planner', authMiddleware, async (req, res) => {
     // Fetch hotel offers
     let hotelOffers = { data: [] };
     try {
-      console.log('Fetching hotel offers:', { cityCode, startDate, endDate });
-      hotelOffers = await amadeus.shopping.hotelOffersSearch.get({
-        cityCode: cityCode,
-        checkInDate: startDate,
-        checkOutDate: endDate,
-        adults: 1,
-        max: 10
-      });
-      if (!hotelOffers.data?.length) {
-        console.warn('No hotel offers found:', { cityCode, startDate, endDate });
+      // Validate city code for hotel search
+      const isValidHotelCity = await validateHotelCityCode(cityCode, amadeus);
+      if (!isValidHotelCity) {
+        console.warn('Invalid or unsupported city code for hotel search:', cityCode);
+      } else {
+        console.log('Fetching hotel offers:', { cityCode, startDate, endDate });
+        hotelOffers = await amadeus.shopping.hotelOffersSearch.get({
+          cityCode: cityCode,
+          checkInDate: startDate,
+          checkOutDate: endDate,
+          adults: 1,
+          max: 10
+        });
+        if (!hotelOffers.data?.length) {
+          console.warn('No hotel offers found:', { cityCode, startDate, endDate });
+        }
       }
     } catch (amadeusError) {
-      console.error('Amadeus hotel search error:', amadeusError.response?.data || amadeusError);
-      return res.status(500).json({ error: `Failed to fetch hotel data from Amadeus: ${amadeusError.response?.data?.errors?.[0]?.detail || amadeusError.message}` });
+      console.warn('Amadeus hotel search error:', amadeusError.response?.data?.errors?.[0]?.detail || amadeusError.message);
+      hotelOffers = { data: [] }; // Continue with empty hotel data
     }
 
     // Fetch points of interest
@@ -564,7 +621,7 @@ app.post('/api/ai-trip-planner', authMiddleware, async (req, res) => {
           destination: destCityDetails.cityName,
           cost,
           activities: activities.length > 1 ? activities : completion.choices[0].message.content.split('\n').filter(line => line.startsWith('-')),
-          hotels: filteredHotels.length ? filteredHotels.map(h => h.hotel?.name || 'Unknown Hotel') : ['No hotels available'],
+          hotels: filteredHotels.length ? filteredHotels.map(h => h.hotel?.name || 'Unknown Hotel') : ['No hotels available for this destination'],
           flights: filteredFlights.length ? filteredFlights.map(f => `${f.itineraries[0].segments[0].departure.iataCode}-${f.itineraries[0].segments[0].arrival.iataCode}`) : ['No flights available'],
           carbonFootprint: calculateCarbonFootprint(filteredFlights),
           topUpRequired: allowTopUp && cost > budget,
