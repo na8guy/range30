@@ -18,7 +18,7 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 // Middleware
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public'), { maxAge: '1d' }));
+app.use(express.static(path.join(__dirname, 'public'), { maxAge: '1d' })); // Cache static files for 1 day
 
 // MongoDB Connection
 mongoose.connect(process.env.MONGODB_URI, {
@@ -51,7 +51,7 @@ async function loadCityDataset() {
     console.log(`Loaded ${cityDataset.length} cities from cities.json`);
   } catch (error) {
     console.error('Error loading city dataset:', error.message);
-    cityDataset = [];
+    cityDataset = []; // Fallback to empty array
   }
 }
 loadCityDataset();
@@ -109,12 +109,14 @@ const authMiddleware = async (req, res, next) => {
   }
 };
 
-// Get Amadeus Access Token
+// Get Amadeus Access Token (for v3 API)
 async function getAmadeusAccessToken() {
   try {
     const response = await fetch('https://test.api.amadeus.com/v1/security/oauth2/token', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
       body: `grant_type=client_credentials&client_id=${encodeURIComponent(process.env.AMADEUS_API_KEY)}&client_secret=${encodeURIComponent(process.env.AMADEUS_API_SECRET)}`
     });
     if (!response.ok) {
@@ -201,6 +203,7 @@ async function validateHotelCityCode(cityCode, amadeus) {
   }
 }
 
+
 // OpenAI retry logic
 async function callOpenAIWithRetry(openai, prompt, retries = 3, delay = 1000) {
   for (let i = 0; i < retries; i++) {
@@ -222,7 +225,6 @@ async function callOpenAIWithRetry(openai, prompt, retries = 3, delay = 1000) {
   }
   throw new Error('Max retries reached for OpenAI API');
 }
-
 // API Routes
 
 // Firebase Config
@@ -244,8 +246,167 @@ app.get('/api/firebase-config', (req, res) => {
   res.json(config);
 });
 
-// Register, Login, Subscriptions, Checkout, Top-Up, Referrals, Notification Token routes remain unchanged
-// [Omitted for brevity, as they are not related to the errors]
+// Register
+app.post('/api/register', async (req, res) => {
+  try {
+    const { name, email, password } = req.body;
+    if (!name || !email || !password) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const userRecord = await admin.auth().createUser({ email, password });
+    const user = new User({ name, email, password: hashedPassword });
+    await user.save();
+    console.log('Register: Created user with ID:', userRecord.uid);
+    const token = await admin.auth().createCustomToken(userRecord.uid);
+    res.json({ token, userId: userRecord.uid });
+  } catch (error) {
+    console.error('Register error:', error);
+    if (error.code === 'auth/email-already-exists') {
+      res.status(400).json({ error: 'Email already exists' });
+    } else {
+      res.status(500).json({ error: 'Server error: Failed to register user' });
+    }
+  }
+});
+
+// Login
+app.post('/api/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Missing email or password' });
+    }
+    const user = await User.findOne({ email });
+    if (!user || !(await bcrypt.compare(password, user.password))) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+    console.log('Login: Generating Firebase token for user ID:', user._id);
+    const token = await admin.auth().createCustomToken(user._id.toString());
+    res.json({ token, userId: user._id });
+  } catch (error) {
+    console.error('Login error:', error);
+    res.status(500).json({ error: 'Server error: Failed to login' });
+  }
+});
+
+// Subscriptions
+app.get('/api/subscriptions', async (req, res) => {
+  try {
+    const subscriptions = await Subscription.find();
+    res.json(subscriptions);
+  } catch (error) {
+    console.error('Subscriptions error:', error);
+    res.status(500).json({ error: 'Server error: Failed to fetch subscriptions' });
+  }
+});
+
+// Create Checkout Session (Stripe)
+app.post('/api/create-checkout-session', authMiddleware, async (req, res) => {
+  try {
+    const { subscriptionId, userId } = req.body;
+    if (!subscriptionId || !userId) {
+      return res.status(400).json({ error: 'Missing subscriptionId or userId' });
+    }
+    const subscription = await Subscription.findById(subscriptionId);
+    if (!subscription) {
+      return res.status(404).json({ error: 'Subscription not found' });
+    }
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ['card'],
+      line_items: [{
+        price_data: {
+          currency: 'gbp',
+          product_data: { name: subscription.name },
+          unit_amount: subscription.price * 100
+        },
+        quantity: 1
+      }],
+      mode: 'subscription',
+      success_url: `${process.env.RENDER_FRONTEND_URL}/#subscriptions`,
+      cancel_url: `${process.env.RENDER_FRONTEND_URL}/#subscriptions`,
+      metadata: { userId, subscriptionId }
+    });
+    res.json({ sessionId: session.id });
+  } catch (error) {
+    console.error('Checkout session error:', error);
+    res.status(500).json({ error: 'Server error: Failed to create checkout session' });
+  }
+});
+
+// Create Top-Up Session (Stripe)
+app.post('/api/create-topup-session', authMiddleware, async (req, res) => {
+  try {
+    const { amount, userId } = req.body;
+    if (!amount || !userId) {
+      return res.status(400).json({ error: 'Missing amount or userId' });
+    }
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ['card'],
+      line_items: [{
+        price_data: {
+          currency: 'gbp',
+          product_data: { name: 'Top-Up' },
+          unit_amount: amount * 100
+        },
+        quantity: 1
+      }],
+      mode: 'payment',
+      success_url: `${process.env.RENDER_FRONTEND_URL}/#planner`,
+      cancel_url: `${process.env.RENDER_FRONTEND_URL}/#planner`,
+      metadata: { userId, type: 'topup' }
+    });
+    res.json({ sessionId: session.id });
+  } catch (error) {
+    console.error('Top-up session error:', error);
+    res.status(500).json({ error: 'Server error: Failed to create top-up session' });
+  }
+});
+
+// Referrals
+app.post('/api/referrals', authMiddleware, async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ error: 'Missing email' });
+    }
+    const referral = new Referral({
+      userId: req.user.uid,
+      email,
+      reward: 10
+    });
+    await referral.save();
+    res.json({ message: 'Referral submitted' });
+  } catch (error) {
+    console.error('Referral error:', error);
+    res.status(500).json({ error: 'Server error: Failed to submit referral' });
+  }
+});
+
+app.get('/api/referrals', authMiddleware, async (req, res) => {
+  try {
+    const referrals = await Referral.find({ userId: req.user.uid });
+    res.json(referrals);
+  } catch (error) {
+    console.error('Referrals fetch error:', error);
+    res.status(500).json({ error: 'Server error: Failed to fetch referrals' });
+  }
+});
+
+// Save Notification Token
+app.post('/api/save-notification-token', authMiddleware, async (req, res) => {
+  try {
+    const { token, userId } = req.body;
+    if (!token || !userId) {
+      return res.status(400).json({ error: 'Missing token or userId' });
+    }
+    await User.updateOne({ _id: userId }, { notificationToken: token });
+    res.json({ message: 'Notification token saved' });
+  } catch (error) {
+    console.error('Notification token error:', error);
+    res.status(500).json({ error: 'Server error: Failed to save notification token' });
+  }
+});
 
 // City Suggestions
 app.get('/api/city-suggestions', async (req, res) => {
