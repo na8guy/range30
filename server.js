@@ -7,6 +7,7 @@ const OpenAI = require('openai');
 const Stripe = require('stripe');
 const path = require('path');
 const cors = require('cors');
+const fs = require('fs').promises;
 const fetch = require('node-fetch');
 require('dotenv').config();
 
@@ -40,6 +41,20 @@ try {
   console.error('Firebase Admin initialization error:', error);
   process.exit(1);
 };
+
+// Load city dataset
+let cityDataset = [];
+async function loadCityDataset() {
+  try {
+    const data = await fs.readFile(path.join(__dirname, 'cities.json'), 'utf8');
+    cityDataset = JSON.parse(data);
+    console.log(`Loaded ${cityDataset.length} cities from cities.json`);
+  } catch (error) {
+    console.error('Error loading city dataset:', error.message);
+    cityDataset = []; // Fallback to empty array
+  }
+}
+loadCityDataset();
 
 // MongoDB Schemas
 const userSchema = new mongoose.Schema({
@@ -116,27 +131,20 @@ async function getAmadeusAccessToken() {
   }
 }
 
-// Sample static city dataset (expanded for Paris and others)
-const staticCities = [
-  { cityName: 'Paris', cityCode: 'PAR', country: 'France', airports: ['CDG', 'ORY'], latitude: 48.8566, longitude: 2.3522 },
-  { cityName: 'Timbuktu', cityCode: 'TOM', country: 'Mali', airports: ['TOM'], latitude: 16.7735, longitude: -3.0074 },
-  { cityName: 'Ulaanbaatar', cityCode: 'ULN', country: 'Mongolia', airports: ['ULN'], latitude: 47.9077, longitude: 106.8832 },
-  { cityName: 'Reykjavik', cityCode: 'REK', country: 'Iceland', airports: ['KEF'], latitude: 64.1355, longitude: -21.8954 }
-];
-
 // Get city code and nearest airport
 async function getCityDetails(cityName, amadeus) {
   try {
-    // Check static dataset first
-    const staticMatch = staticCities.find(c => c.cityName.toLowerCase() === cityName.toLowerCase());
+    // Check dataset first
+    const staticMatch = cityDataset.find(c => c.cityName.toLowerCase() === cityName.toLowerCase());
     if (staticMatch) {
-      console.log(`Using static city data for ${cityName}:`, staticMatch);
+      console.log(`Using dataset city data for ${cityName}:`, staticMatch);
       return staticMatch;
     }
 
+    // Fallback to Amadeus API
     const response = await amadeus.referenceData.locations.get({
       subType: 'CITY',
-      keyword: cityName, // Removed toUpperCase for flexibility
+      keyword: cityName,
       'page[limit]': 1
     });
     if (response.data.length === 0) {
@@ -161,7 +169,7 @@ async function getCityDetails(cityName, amadeus) {
     return cityDetails;
   } catch (error) {
     console.error(`City details error for ${cityName}:`, error.response?.data || error.message);
-    return staticCities.find(c => c.cityName.toLowerCase() === cityName.toLowerCase()) || null;
+    return cityDataset.find(c => c.cityName.toLowerCase() === cityName.toLowerCase()) || null;
   }
 }
 
@@ -372,6 +380,24 @@ app.get('/api/city-suggestions', async (req, res) => {
     if (!query || query.length < 1) {
       return res.status(400).json({ error: 'Query must be at least 1 character' });
     }
+
+    // Search in-memory dataset first
+    const regex = new RegExp(`^${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i');
+    const suggestions = cityDataset
+      .filter(c => regex.test(c.cityName))
+      .map(c => ({
+        cityCode: c.cityCode,
+        cityName: c.cityName,
+        country: c.country
+      }))
+      .slice(0, 20);
+
+    if (suggestions.length > 0) {
+      console.log(`Found ${suggestions.length} city suggestions for query: ${query}`);
+      return res.json(suggestions);
+    }
+
+    // Fallback to Amadeus API
     const amadeus = new Amadeus({
       clientId: process.env.AMADEUS_API_KEY,
       clientSecret: process.env.AMADEUS_API_SECRET
@@ -382,34 +408,16 @@ app.get('/api/city-suggestions', async (req, res) => {
       sort: 'analytics.travelers.score',
       'page[limit]': 20
     });
-    let suggestions = response.data.map(city => ({
+    const amadeusSuggestions = response.data.map(city => ({
       cityCode: city.address.cityCode,
       cityName: city.name || city.address.cityName,
       country: city.address.countryName || 'Unknown'
     }));
-    const staticMatches = staticCities
-      .filter(c => c.cityName.toLowerCase().startsWith(query.toLowerCase()))
-      .map(c => ({
-        cityCode: c.cityCode,
-        cityName: c.cityName,
-        country: c.country
-      }));
-    suggestions = [...new Set([...suggestions, ...staticMatches].map(s => JSON.stringify(s)))].map(s => JSON.parse(s));
-    res.json(suggestions.slice(0, 20));
+    console.log(`Fetched ${amadeusSuggestions.length} city suggestions from Amadeus for query: ${query}`);
+    res.json(amadeusSuggestions.slice(0, 20));
   } catch (error) {
     console.error('City suggestions error:', error.response?.data || error.message);
-    const staticMatches = staticCities
-      .filter(c => c.cityName.toLowerCase().startsWith(query.toLowerCase()))
-      .map(c => ({
-        cityCode: c.cityCode,
-        cityName: c.cityName,
-        country: c.country
-      }));
-    if (staticMatches.length > 0) {
-      res.json(staticMatches.slice(0, 20));
-    } else {
-      res.status(500).json({ error: `Failed to fetch city suggestions: ${error.response?.data?.errors?.[0]?.detail || error.message}` });
-    }
+    res.status(500).json({ error: `Failed to fetch city suggestions: ${error.response?.data?.errors?.[0]?.detail || error.message}` });
   }
 });
 
