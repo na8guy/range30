@@ -138,18 +138,33 @@ async function initializeAuth() {
   }
 }
 
+// Retry fetch with exponential backoff
+async function fetchWithRetry(url, options, retries = 3, backoff = 1000) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const response = await fetch(url, options);
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`HTTP error! Status: ${response.status}, Response: ${text}`);
+      }
+      return await response.json();
+    } catch (error) {
+      console.error(`Fetch attempt ${i + 1} failed for ${url}:`, error.message);
+      if (i < retries - 1) {
+        await new Promise(resolve => setTimeout(resolve, backoff * Math.pow(2, i)));
+      } else {
+        throw error;
+      }
+    }
+  }
+}
+
 // Fetch subscriptions
 async function fetchSubscriptions() {
   loading.style.display = 'block';
   try {
     console.log('Fetching subscriptions from:', `${BACKEND_URL}/api/subscriptions`);
-    const response = await fetch(`${BACKEND_URL}/api/subscriptions`);
-    if (!response.ok) {
-      const text = await response.text();
-      console.error('Subscriptions fetch failed:', { status: response.status, statusText: response.statusText, responseText: text });
-      throw new Error(`HTTP error! Status: ${response.status}, Response: ${text}`);
-    }
-    const subscriptions = await response.json();
+    const subscriptions = await fetchWithRetry(`${BACKEND_URL}/api/subscriptions`, {});
     if (!subscriptions || subscriptions.length === 0) {
       subscriptionsList.innerHTML = '<p>No subscriptions available</p>';
       return;
@@ -184,17 +199,12 @@ async function subscribe(subscriptionId) {
     const user = window.firebaseAuth.currentUser;
     const token = await user.getIdToken();
     console.log('Subscribing with user ID:', user.uid);
-    const response = await fetch(`${BACKEND_URL}/api/create-checkout-session`, {
+    const response = await fetchWithRetry(`${BACKEND_URL}/api/create-checkout-session`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
       body: JSON.stringify({ subscriptionId, userId: user.uid })
     });
-    if (!response.ok) {
-      const text = await response.text();
-      console.error('Checkout session fetch failed:', { status: response.status, statusText: response.statusText, responseText: text });
-      throw new Error(`HTTP error! Status: ${response.status}, Response: ${text}`);
-    }
-    const { sessionId } = await response.json();
+    const { sessionId } = response;
     await stripe.redirectToCheckout({ sessionId });
   } catch (error) {
     console.error('Subscription error:', error);
@@ -206,18 +216,13 @@ async function subscribe(subscriptionId) {
 // City suggestions
 async function fetchCitySuggestions(query) {
   try {
-    const response = await fetch(`${BACKEND_URL}/api/city-suggestions?query=${encodeURIComponent(query)}`);
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`HTTP error! Status: ${response.status}, Response: ${text}`);
-    }
-    const suggestions = await response.json();
-    suggestionsContainer.innerHTML = suggestions.map(s => `
+    const response = await fetchWithRetry(`${BACKEND_URL}/api/city-suggestions?query=${encodeURIComponent(query)}`, {});
+    suggestionsContainer.innerHTML = response.map(s => `
       <div class="suggestion" data-city="${s.cityName}">
         ${s.cityName}, ${s.country}
       </div>
     `).join('');
-    suggestionsContainer.style.display = suggestions.length ? 'block' : 'none';
+    suggestionsContainer.style.display = response.length ? 'block' : 'none';
     document.querySelectorAll('.suggestion').forEach(item => {
       item.addEventListener('click', () => {
         destinationInput.value = item.dataset.city;
@@ -228,25 +233,20 @@ async function fetchCitySuggestions(query) {
     });
   } catch (error) {
     console.error('City suggestions error:', error.message);
-    suggestionsContainer.innerHTML = `<p>Error loading suggestions: ${error.message}</p>`;
+    suggestionsContainer.innerHTML = `<p>Error loading suggestions: ${error.message}. Please try again.</p>`;
   }
 }
 
 // Destination suggestions
 async function fetchDestinationSuggestions() {
   try {
-    const response = await fetch(`${BACKEND_URL}/api/destination-suggestions`);
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`HTTP error! Status: ${response.status}, Response: ${text}`);
-    }
-    const suggestions = await response.json();
-    suggestionsContainer.innerHTML = suggestions.map(s => `
+    const response = await fetchWithRetry(`${BACKEND_URL}/api/destination-suggestions`, {});
+    suggestionsContainer.innerHTML = response.map(s => `
       <div class="suggestion" data-city="${s.cityName}">
-        ${s.cityName}, ${s.country} - €${s.price} (Depart: ${s.departureDate}, Return: ${s.returnDate})
+        ${s.cityName}, ${s.country} - £${(parseFloat(s.price) * 0.85).toFixed(2)} (Depart: ${s.departureDate}, Return: ${s.returnDate})
       </div>
     `).join('');
-    suggestionsContainer.style.display = suggestions.length ? 'block' : 'none';
+    suggestionsContainer.style.display = response.length ? 'block' : 'none';
     document.querySelectorAll('.suggestion').forEach(item => {
       item.addEventListener('click', () => {
         destinationInput.value = item.dataset.city;
@@ -256,14 +256,14 @@ async function fetchDestinationSuggestions() {
     });
   } catch (error) {
     console.error('Destination suggestions error:', error.message);
-    suggestionsContainer.innerHTML = `<p>Error loading suggestions: ${error.message}</p>`;
+    suggestionsContainer.innerHTML = `<p>Error loading suggestions: ${error.message}. Please try again.</p>`;
   }
 }
 
 // Trigger city suggestions on input
 destinationInput.addEventListener('input', (e) => {
   const query = e.target.value.trim();
-  if (query.length >= 2) {
+  if (query.length >= 1) {
     fetchCitySuggestions(query);
   } else {
     suggestionsContainer.innerHTML = '';
@@ -299,22 +299,11 @@ tripPlannerForm.addEventListener('submit', async (e) => {
       language: 'en'
     };
     console.log('Planning trip for user ID:', user.uid, 'with data:', formData);
-    const response = await fetch(`${BACKEND_URL}/api/ai-trip-planner`, {
+    const plans = await fetchWithRetry(`${BACKEND_URL}/api/ai-trip-planner`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
       body: JSON.stringify(formData)
     });
-    if (!response.ok) {
-      const text = await response.text();
-      console.error('Trip planner fetch failed:', {
-        status: response.status,
-        statusText: response.statusText,
-        responseText: text,
-        url: response.url
-      });
-      throw new Error(`HTTP error! Status: ${response.status}, Response: ${text}`);
-    }
-    const plans = await response.json();
     console.log('Trip plans received:', plans);
     tripResult.innerHTML = plans.map((plan, index) => `
       <div class="trip-plan">
@@ -332,7 +321,7 @@ tripPlannerForm.addEventListener('submit', async (e) => {
     `).join('');
   } catch (error) {
     console.error('Trip planner error:', error.message, error.stack);
-    tripResult.innerHTML = `<p>Error planning trip: ${error.message}</p>`;
+    tripResult.innerHTML = `<p>Error planning trip: ${error.message}. Please try again later.</p>`;
   }
   loading.style.display = 'none';
 });
@@ -348,17 +337,12 @@ async function topUp(amount, userId) {
   try {
     const token = await window.firebaseAuth.currentUser.getIdToken();
     console.log('Top-up for user ID:', userId, 'amount:', amount);
-    const response = await fetch(`${BACKEND_URL}/api/create-topup-session`, {
+    const response = await fetchWithRetry(`${BACKEND_URL}/api/create-topup-session`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
       body: JSON.stringify({ amount, userId })
     });
-    if (!response.ok) {
-      const text = await response.text();
-      console.error('Top-up fetch failed:', { status: response.status, statusText: response.statusText, responseText: text });
-      throw new Error(`HTTP error! Status: ${response.status}, Response: ${text}`);
-    }
-    const { sessionId } = await response.json();
+    const { sessionId } = response;
     await stripe.redirectToCheckout({ sessionId });
   } catch (error) {
     console.error('Top-up error:', error);
@@ -380,17 +364,12 @@ referralForm.addEventListener('submit', async (e) => {
     const user = window.firebaseAuth.currentUser;
     const token = await user.getIdToken();
     console.log('Submitting referral for user ID:', user.uid);
-    const response = await fetch(`${BACKEND_URL}/api/referrals`, {
+    const response = await fetchWithRetry(`${BACKEND_URL}/api/referrals`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
       body: JSON.stringify({ email: document.getElementById('referral-email').value })
     });
-    if (!response.ok) {
-      const text = await response.text();
-      console.error('Referral fetch failed:', { status: response.status, statusText: response.statusText, responseText: text });
-      throw new Error(`HTTP error! Status: ${response.status}, Response: ${text}`);
-    }
-    await response.json();
+    await response;
     fetchReferrals();
   } catch (error) {
     console.error('Referral error:', error);
@@ -409,15 +388,9 @@ async function fetchReferrals() {
     const user = window.firebaseAuth.currentUser;
     const token = await user.getIdToken();
     console.log('Fetching referrals for user ID:', user.uid);
-    const response = await fetch(`${BACKEND_URL}/api/referrals`, {
+    const referrals = await fetchWithRetry(`${BACKEND_URL}/api/referrals`, {
       headers: { 'Authorization': `Bearer ${token}` }
     });
-    if (!response.ok) {
-      const text = await response.text();
-      console.error('Referrals fetch failed:', { status: response.status, statusText: response.statusText, responseText: text });
-      throw new Error(`HTTP error! Status: ${response.status}, Response: ${text}`);
-    }
-    const referrals = await response.json();
     referralsList.innerHTML = referrals.length
       ? referrals.map(r => `<p>Referred ${r.email} - Reward: £${r.reward}</p>`).join('')
       : '<p>No referrals yet</p>';
@@ -440,17 +413,12 @@ loginForm.addEventListener('submit', async (e) => {
     const email = document.getElementById('login-email').value;
     const password = document.getElementById('login-password').value;
     console.log('Login: Sending request to /api/login with email:', email);
-    const response = await fetch(`${BACKEND_URL}/api/login`, {
+    const response = await fetchWithRetry(`${BACKEND_URL}/api/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password })
     });
-    if (!response.ok) {
-      const text = await response.text();
-      console.error('Login fetch failed:', { status: response.status, statusText: response.statusText, responseText: text });
-      throw new Error(`HTTP error! Status: ${response.status}, Message: ${text}`);
-    }
-    const { token, userId } = await response.json();
+    const { token, userId } = response;
     console.log('Login: Received Firebase custom token, user ID:', userId);
     try {
       const userCredential = await signInWithCustomToken(window.firebaseAuth, token);
@@ -480,17 +448,12 @@ registerForm.addEventListener('submit', async (e) => {
     const email = document.getElementById('register-email').value;
     const password = document.getElementById('register-password').value;
     console.log('Register: Sending request to /api/register with email:', email);
-    const response = await fetch(`${BACKEND_URL}/api/register`, {
+    const response = await fetchWithRetry(`${BACKEND_URL}/api/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, email, password })
     });
-    if (!response.ok) {
-      const text = await response.text();
-      console.error('Register fetch failed:', { status: response.status, statusText: response.statusText, responseText: text });
-      throw new Error(`HTTP error! Status: ${response.status}, Message: ${text}`);
-    }
-    const { token, userId } = await response.json();
+    const { token, userId } = response;
     console.log('Register: Received Firebase custom token, user ID:', userId);
     try {
       const userCredential = await signInWithCustomToken(window.firebaseAuth, token);
@@ -523,7 +486,7 @@ if (window.firebaseMessaging && (await waitForFirebase())) {
     const token = await getToken(window.firebaseMessaging, { vapidKey: window.vapidKey });
     if (window.firebaseAuth?.currentUser) {
       const idToken = await window.firebaseAuth.currentUser.getIdToken();
-      await fetch(`${BACKEND_URL}/api/save-notification-token`, {
+      await fetchWithRetry(`${BACKEND_URL}/api/save-notification-token`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
         body: JSON.stringify({ token, userId: window.firebaseAuth.currentUser.uid })
